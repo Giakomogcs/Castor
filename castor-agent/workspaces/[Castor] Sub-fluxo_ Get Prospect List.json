@@ -1,0 +1,70 @@
+{
+  "name": "[Castor] Sub-fluxo_ Get Prospect List",
+  "nodes": [
+    {
+      "parameters": {
+        "inputSource": "passthrough"
+      },
+      "id": "c0300200-0000-0000-0000-000000000001",
+      "name": "When called",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [0, 0]
+    },
+    {
+      "parameters": { "jsCode": "console.log(JSON.stringify({tool:'get_prospect_list', input:$json}));\nreturn $input.all();" },
+      "id": "c0300200-0000-0000-0000-000000000002",
+      "name": "Log input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [200, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Apenas valida e monta parâmetros. A chamada HTTP ao snapshot vai no nó HTTP Request seguinte\n// para evitar o timeout de 60s do task runner do Code node (N8N_RUNNERS_TASK_TIMEOUT).\nconst PANEL_BASE = 'https://longflatworm-n8n.cloudfy.live/webhook';\nconst input = $json || {};\nconst userId = String(input.user_id || '').trim();\nconst limit = Math.max(1, Math.min(500, +input.limit || 50));\nconst uf = input.uf ? String(input.uf).trim().toUpperCase() : '';\nconst seg = input.segmento ? String(input.segmento).trim().toLowerCase() : '';\nconst url = PANEL_BASE + '/castor-panel-snapshot' + (userId ? '?userId=' + encodeURIComponent(userId) : '');\nreturn [{ json: { user_id: userId, limit, uf, seg, url, missing_user_id: !userId } }];"
+      },
+      "id": "c0300200-0000-0000-0000-000000000003",
+      "name": "Prepare params",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [400, 0]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $json.url }}",
+        "options": {
+          "timeout": 280000,
+          "response": { "response": { "responseFormat": "json" } }
+        }
+      },
+      "id": "c0300200-0000-0000-0000-000000000004",
+      "name": "Fetch snapshot",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [600, 0],
+      "continueOnFail": true,
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const params = $('Prepare params').first().json;\nif (params.missing_user_id) {\n  return [{ json: { ok: false, data: [], error: 'user_id_required' } }];\n}\nconst resp = $json || {};\nif (resp.error && !resp.ok) {\n  // http-level error surfaced by continueOnFail\n  return [{ json: { ok: false, data: [], error: 'snapshot_failed: ' + (resp.error.message || resp.error) } }];\n}\nif (!resp || resp.ok === false) {\n  return [{ json: { ok: false, data: [], error: 'snapshot_failed: ' + ((resp && resp.error) || 'snapshot indisponivel') } }];\n}\nconst snap = resp.data || {};\nconst limit = params.limit, uf = params.uf, seg = params.seg;\nlet rows = (snap.leads || []).slice();\nif (uf) rows = rows.filter(l => (l.za7_est || '').toUpperCase() === uf);\nif (seg) rows = rows.filter(l => (l.za7_segmento || '').toLowerCase().includes(seg));\nrows.sort((a,b) => (a.za7_est||'').localeCompare(b.za7_est||'') || (a.za7_mun||'').localeCompare(b.za7_mun||'') || (a.za7_nome||'').localeCompare(b.za7_nome||''));\nfor (let i = 0; i < rows.length; i++) rows[i].fila_rank = i + 1;\nconst sliced = rows.slice(0, limit);\nreturn [{ json: { ok: true, data: sliced, error: null, meta: { total: rows.length, returned: sliced.length, source: 'snapshot', generated_at: snap.generated_at } } }];"
+      },
+      "id": "c0300200-0000-0000-0000-000000000005",
+      "name": "Filter & respond",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [800, 0]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "When called":       { "main": [[{ "node": "Log input", "type": "main", "index": 0 }]] },
+    "Log input":         { "main": [[{ "node": "Prepare params", "type": "main", "index": 0 }]] },
+    "Prepare params":    { "main": [[{ "node": "Fetch snapshot", "type": "main", "index": 0 }]] },
+    "Fetch snapshot":    { "main": [[{ "node": "Filter & respond", "type": "main", "index": 0 }]] }
+  },
+  "active": false,
+  "settings": { "executionOrder": "v1" },
+  "tags": [{ "name": "Castor" }]
+}

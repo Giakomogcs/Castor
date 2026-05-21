@@ -1,0 +1,51 @@
+{
+  "name": "[Castor] Sub-fluxo_ Classify Client Size",
+  "nodes": [
+    {
+      "parameters": {
+        "inputSource": "passthrough"
+      },
+      "id": "c0300500-0000-0000-0000-000000000001",
+      "name": "When called",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [0, 0]
+    },
+    {
+      "parameters": { "jsCode": "const cnpj = String($json.cnpj || '').replace(/\\D/g,'');\nif (cnpj.length !== 14) return [{json:{ok:false,data:null,error:'CNPJ inválido (14 dígitos)'}}];\nreturn [{ json: { cnpj, force_refresh: !!$json.force_refresh } }];" },
+      "id": "c0300500-0000-0000-0000-000000000002",
+      "name": "Normalize CNPJ",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [200, 0]
+    },
+    {
+      "parameters": {
+        "workflowId": { "__rl": true, "value": "__FILL_ME__SUBFLOW_ID_CONSULTAR_CNPJ__", "mode": "list", "cachedResultName": "[Castor] Sub-fluxo_ Consultar CNPJ" },
+        "options": { "waitForSubWorkflow": true }
+      },
+      "id": "c0300500-0000-0000-0000-000000000003",
+      "name": "Consultar CNPJ",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [400, 0]
+    },
+    {
+      "parameters": { "jsCode": "const d = $json.data || $json;\nconst porteRf = (d.porte_rf || d.porte || '').toUpperCase();\nlet porte = 'grande';\nif (['MEI','ME'].includes(porteRf)) porte = 'pequeno';\nelse if (porteRf === 'EPP') porte = 'medio';\nreturn [{ json: { ok:true, data: { cnpj: d.cnpj, porte, porte_rf: porteRf, razao_social: d.razao_social ?? null }, error:null } }];" },
+      "id": "c0300500-0000-0000-0000-000000000004",
+      "name": "Map porte",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [600, 0]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "When called": { "main": [[{ "node": "Normalize CNPJ", "type": "main", "index": 0 }]] },
+    "Normalize CNPJ": { "main": [[{ "node": "Consultar CNPJ", "type": "main", "index": 0 }]] },
+    "Consultar CNPJ": { "main": [[{ "node": "Map porte", "type": "main", "index": 0 }]] }
+  },
+  "active": false,
+  "settings": { "executionOrder": "v1" },
+  "tags": [{ "name": "Castor" }]
+}

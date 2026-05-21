@@ -1,0 +1,167 @@
+{
+  "nodes": [
+    {
+      "parameters": {
+        "inputSource": "passthrough"
+      },
+      "id": "3a2419e5-9e60-4a8a-a14a-820a021dee40",
+      "name": "When called",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [1952, 928]
+    },
+    {
+      "parameters": {
+        "jsCode": "console.log(JSON.stringify({tool:'get_client_profile', input:$json}));\nreturn $input.all();"
+      },
+      "id": "2c737890-043a-48df-abe1-511f49e74ff2",
+      "name": "Log input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2144, 928]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Valida entrada e monta URL do snapshot. HTTP fica no nó seguinte para evitar timeout de 60s do Code task runner.\nconst PANEL_BASE = 'https://longflatworm-n8n.cloudfy.live/webhook';\nconst input = $json || {};\nconst code = String(input.cliente_codigo || '').trim();\nconst userId = String(input.user_id || '');\nconst url = PANEL_BASE + '/castor-panel-snapshot' + (userId ? '?userId=' + encodeURIComponent(userId) : '');\nreturn [{ json: { user_id: userId, code, url, missing_code: !code } }];"
+      },
+      "id": "9c210877-f8cd-4813-b20c-0d9077d1b919",
+      "name": "Prepare params",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2320, 928]
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.url }}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "json"
+            }
+          },
+          "timeout": 280000
+        }
+      },
+      "id": "8fa15810-a3db-44b7-b5ca-19173f9665fd",
+      "name": "Fetch snapshot",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2496, 928],
+      "alwaysOutputData": true,
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const params = $('Prepare params').first().json;\nif (params.missing_code) return [{ json: { ok: false, data: null, error: 'cliente_codigo obrigatorio' } }];\nconst resp = $json || {};\nif (resp.error && !resp.ok) return [{ json: { ok: false, data: null, error: 'snapshot_failed: ' + (resp.error.message || resp.error) } }];\nif (!resp || resp.ok === false) return [{ json: { ok: false, data: null, error: 'snapshot_failed: ' + ((resp && resp.error) || 'snapshot indisponivel') } }];\nconst snap = resp.data || {};\nconst cli = (snap.clientes || []).find(c => c.cliente_codigo === params.code);\nif (!cli) return [{ json: { ok: false, code: params.code, data: null, error: 'cliente nao encontrado no snapshot' } }];\nreturn [{ json: { ok: true, code: params.code, cliente: cli } }];"
+      },
+      "id": "06e262e4-5945-4166-a744-a1056bdea814",
+      "name": "Snapshot fetch",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2672, 928]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT to_jsonb(v.*) AS visit\nFROM castor_visita_feedback v\nWHERE v.cliente_codigo = '{{ $json.code.replace(/'/g, \"''\") }}'\nORDER BY v.visited_at DESC\nLIMIT 50;",
+        "options": {}
+      },
+      "id": "3cbe695e-a014-4fa9-975d-211122dade29",
+      "name": "PG: visit history",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [2832, 928],
+      "alwaysOutputData": true,
+      "credentials": {
+        "postgres": {
+          "id": "jFjeYH6Nt3aRNkoM",
+          "name": "Supabase_database"
+        }
+      },
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const meta = $('Snapshot fetch').first().json;\nif (!meta.ok) return [{ json: meta }];\nconst visits = ($input.all() || []).map(i => i.json && (i.json.visit || i.json)).filter(Boolean);\nconst cli = meta.cliente;\nreturn [{ json: { ok: true, data: { cliente: cli, visitas: visits, last_feedback: cli.last_feedback || null }, error: null } }];"
+      },
+      "id": "6753ffa3-a517-4552-892a-950a5ded9ffe",
+      "name": "Envelope",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [3008, 928]
+    }
+  ],
+  "connections": {
+    "When called": {
+      "main": [
+        [
+          {
+            "node": "Log input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log input": {
+      "main": [
+        [
+          {
+            "node": "Prepare params",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare params": {
+      "main": [
+        [
+          {
+            "node": "Fetch snapshot",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch snapshot": {
+      "main": [
+        [
+          {
+            "node": "Snapshot fetch",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Snapshot fetch": {
+      "main": [
+        [
+          {
+            "node": "PG: visit history",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "PG: visit history": {
+      "main": [
+        [
+          {
+            "node": "Envelope",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "03d32a206f2d8840fce482e6c587726f18775bd9177e9401c00ca76d3086ad41"
+  }
+}

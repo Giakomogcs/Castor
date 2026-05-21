@@ -1,0 +1,112 @@
+{
+  "name": "[Castor] Sub-fluxo_ Consultar CNPJ",
+  "nodes": [
+    {
+      "parameters": {
+        "inputSource": "passthrough"
+      },
+      "id": "c0300600-0000-0000-0000-000000000001",
+      "name": "When called",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [0, 0]
+    },
+    {
+      "parameters": { "jsCode": "const cnpj = String($json.cnpj||'').replace(/\\D/g,'');\nreturn [{json:{cnpj, force_refresh: !!$json.force_refresh}}];" },
+      "id": "c0300600-0000-0000-0000-000000000002",
+      "name": "Normalize",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [200, 0]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT * FROM castor_cnpj_cache WHERE cnpj = '{{ $json.cnpj }}' AND expires_at > NOW() LIMIT 1;",
+        "options": {}
+      },
+      "id": "c0300600-0000-0000-0000-000000000003",
+      "name": "Check cache",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [400, 0],
+      "credentials": { "postgres": { "id": "__FILL_ME__POSTGRES_CRED_ID__", "name": "Postgres Castor" } }
+    },
+    {
+      "parameters": {
+        "conditions": { "options": { "caseSensitive": false, "leftValue": "", "typeValidation": "loose" },
+          "conditions": [{ "id": "1", "leftValue": "={{ $('Normalize').item.json.force_refresh || !$json.cnpj }}", "rightValue": "true", "operator": { "type": "boolean", "operation": "equals" } }] }
+      },
+      "id": "c0300600-0000-0000-0000-000000000004",
+      "name": "Cache miss?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [600, 0]
+    },
+    {
+      "parameters": {
+        "url": "=https://brasilapi.com.br/api/cnpj/v1/{{ $('Normalize').item.json.cnpj }}",
+        "options": { "timeout": 10000 }
+      },
+      "id": "c0300600-0000-0000-0000-000000000005",
+      "name": "Fetch BrasilAPI",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [800, -100],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "url": "=https://receitaws.com.br/v1/cnpj/{{ $('Normalize').item.json.cnpj }}",
+        "options": { "timeout": 10000 }
+      },
+      "id": "c0300600-0000-0000-0000-000000000006",
+      "name": "Fallback ReceitaWS",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1000, 0]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO castor_cnpj_cache(cnpj, razao_social, porte, porte_rf, cnae_principal, situacao_cadastral, payload, fetched_at, expires_at)\nVALUES ('{{ $('Normalize').item.json.cnpj }}',\n  $1,$2,$3,$4,$5,$6::jsonb, NOW(), NOW()+INTERVAL '30 days')\nON CONFLICT (cnpj) DO UPDATE SET razao_social=EXCLUDED.razao_social, porte=EXCLUDED.porte, porte_rf=EXCLUDED.porte_rf,\n  cnae_principal=EXCLUDED.cnae_principal, situacao_cadastral=EXCLUDED.situacao_cadastral,\n  payload=EXCLUDED.payload, fetched_at=NOW(), expires_at=NOW()+INTERVAL '30 days'\nRETURNING *;",
+        "options": { "queryReplacement": "={{ [$json.razao_social ?? $json.nome ?? null, ((p) => ({MEI:'pequeno',ME:'pequeno',EPP:'medio'})[String(p||'').toUpperCase()] || 'grande')($json.porte ?? $json.porte_empresa), ($json.porte ?? $json.porte_empresa ?? null), ($json.cnae_fiscal ?? null), ($json.situacao_cadastral ?? $json.descricao_situacao_cadastral ?? null), JSON.stringify($json)] }}" }
+      },
+      "id": "c0300600-0000-0000-0000-000000000007",
+      "name": "Upsert cache",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [1200, 0],
+      "credentials": { "postgres": { "id": "__FILL_ME__POSTGRES_CRED_ID__", "name": "Postgres Castor" } }
+    },
+    {
+      "parameters": { "jsCode": "const r = $input.first().json;\nreturn [{ json: { ok:true, data: r, error:null } }];" },
+      "id": "c0300600-0000-0000-0000-000000000008",
+      "name": "Envelope",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1400, 0]
+    },
+    {
+      "parameters": { "jsCode": "const r = $input.first().json;\nreturn [{ json: { ok:true, data: r, error:null } }];" },
+      "id": "c0300600-0000-0000-0000-000000000009",
+      "name": "Envelope from cache",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [800, 200]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "When called": { "main": [[{ "node": "Normalize", "type": "main", "index": 0 }]] },
+    "Normalize": { "main": [[{ "node": "Check cache", "type": "main", "index": 0 }]] },
+    "Check cache": { "main": [[{ "node": "Cache miss?", "type": "main", "index": 0 }]] },
+    "Cache miss?": { "main": [[{ "node": "Fetch BrasilAPI", "type": "main", "index": 0 }], [{ "node": "Envelope from cache", "type": "main", "index": 0 }]] },
+    "Fetch BrasilAPI": { "main": [[{ "node": "Upsert cache", "type": "main", "index": 0 }], [{ "node": "Fallback ReceitaWS", "type": "main", "index": 0 }]] },
+    "Fallback ReceitaWS": { "main": [[{ "node": "Upsert cache", "type": "main", "index": 0 }]] },
+    "Upsert cache": { "main": [[{ "node": "Envelope", "type": "main", "index": 0 }]] }
+  },
+  "active": false,
+  "settings": { "executionOrder": "v1" },
+  "tags": [{ "name": "Castor" }]
+}

@@ -1,0 +1,43 @@
+# Workspaces — Castor Agent Tool Catalog
+
+Cada subflow declara entrada/saída no padrão `{ok, data, error}`. O agente principal `Castor-Agent-IA` consome esses tools via `Execute Workflow`.
+
+## Endpoints HTTP (webhooks)
+
+| Path | Método | Workflow | Para quê |
+|---|---|---|---|
+| `/castor-agent` | POST | Castor-Agent-IA | Chat principal (recebe `<user_context>` + `<user_message>`) |
+| `/castor-sessions?userId=` | GET | Castor-Chat-GET-Sessions | Lista sessões do usuário |
+| `/castor-history?userId=&sessionId=` | GET | Castor-Chat-GET-History | Mensagens de uma sessão |
+| `/castor-delete-session` | POST | Castor-Chat-DELETE-Session | Remove sessão (body: `{userId, sessionId}`) |
+| `/castor-rag-schema-setup` | POST | Castor-DB-Schema-Setup | Tier B idempotente (vector store) |
+| `/castor-rag-reindex-drive` | POST | Castor-RAG | Lista/embeda toda a pasta `DRIVE_FOLDER_ID_RAG` |
+| `/castor-rag-drive-replace` | POST | Castor-RAG | Substitui conteúdo de um `file_id` (preserva ID) |
+| `/castor-rag-purge-all` | POST | Castor-RAG | TRUNCATE Tier B (nunca DROP) |
+| `/castor-rag-docs` | GET | Castor-RAG | Lista metadata atual |
+| `/castor-source-list` | GET | Castor-Source-Manager | Admin: lista CSVs canônicos no Drive (SA1010, SA3010, SF2010, ...) |
+| `/castor-source-replace` | POST | Castor-Source-Manager | Admin: substitui um CSV no Drive preservando `file_id` |
+| `/castor-panel-snapshot` | GET | Castor-Panel-API | **Drive-only.** Retorna `{clientes, leads, municipios, totals}` lendo SA1010/SA3010/SF2010/SC5010/ZA7010/CC2010 do Drive + cruzando com `castor_visita_feedback` e `castor_cnpj_cache`. Cache 5 min em `workflowStaticData`. Query: `userId` |
+| `/castor-panel-route` | POST | Castor-Panel-API | `{user_id, stops:[{cliente_codigo,lat,lng}], origin_lat?, origin_lng?, source?}` → roteiro NN + maps_url + total_km + log em `castor_route_log` |
+| `/castor-panel-feedback` | POST | Castor-Panel-API | `{user_id,cliente_codigo,outcome,custom_days?,notes?,idempotency_key?}` (RPC `castor_register_visit_feedback` via `SET LOCAL request.jwt.claim.sub`) |
+| `/castor-panel-cache-purge` | POST | Castor-Panel-API | Invalida o cache em memória do snapshot (chamar após `/castor-source-replace`) |
+
+## Tools registradas no Castor-Agent-IA
+
+| Tool | Subflow | Inputs | Saída resumida | Idempotente |
+|---|---|---|---|---|
+| `get_reactivation_list` | `[Castor] Sub-fluxo_ Get Reactivation List.json` | `{user_id, role?, limit?, uf?, only_eligible?}` | `[{cliente_codigo, a1_nome, priority_rank, faturamento_12m, ultima_visita, days_until_recall, ...}]` (filtra+ranqueia o snapshot) | yes (read) |
+| `get_prospect_list` | `[Castor] Sub-fluxo_ Get Prospect List.json` | `{user_id, role?, limit?, uf?, segmento?}` | `[{za7_cnpj, za7_nome, fila_rank, ...}]` (filtra `snapshot.leads`) | yes (read) |
+| `get_client_profile` | `[Castor] Sub-fluxo_ Get Client Profile.json` | `{cliente_codigo, user_id?}` | `{cliente, visitas[], last_feedback}` (snapshot + `castor_visita_feedback`) | yes (read) |
+| `register_visit_feedback` | `[Castor] Sub-fluxo_ Register Visit Feedback.json` | `{user_id, cliente_codigo, outcome, custom_days?, notes?, idempotency_key?}` | `{id, next_contact_at, ...}` | yes (key) |
+| `classify_client_size` | `[Castor] Sub-fluxo_ Classify Client Size.json` | `{cnpj, force_refresh?}` | `{porte, porte_rf, razao_social}` | yes (cache) |
+| `consultar_cnpj` | `[Castor] Sub-fluxo_ Consultar CNPJ.json` | `{cnpj, force_refresh?}` | `{razao_social, porte_rf, cnae_principal, situacao_cadastral, payload}` | yes (cache) |
+| `route_order` | `[Castor] Sub-fluxo_ Route Order.json` | `{client_codes[], user_id, origin_lat?, origin_lng?, source}` | `{stops, total_km, maps_url, skipped[]}` (snapshot resolve coords + chama `/castor-panel-route`) | yes (read) |
+| `search_knowledge_base` | (vector store) | `{query, top_k?}` | `[{content, title, similarity}]` | yes (read) |
+
+## Constraints check
+
+- `grep -i 'DROP .* CASCADE'` em `workspaces/*.json` → zero
+- `grep -i 'files.delete'` → zero (RAG só usa `files.update` no mesmo `file_id`)
+- `grep -i 'service_role'` em `workspaces/*.json` → zero
+- Toda credential reference está como `__FILL_ME__*_CRED_ID__` para religar após import no n8n.

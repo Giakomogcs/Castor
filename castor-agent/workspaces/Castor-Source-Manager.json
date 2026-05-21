@@ -1,0 +1,1714 @@
+{
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## 📂 Castor — Source Manager (Drive + Postgres)\n\nGerencia dumps Protheus na pasta Drive `1mFSgsUNhDCAsq73prFtD5b1RyqtXpIUx` e carrega em tabelas/agregados Postgres.\n\n**Endpoints:**\n- `GET  /castor-source-list`    → arquivos canônicos no Drive (filename, file_id, size, modified_at).\n- `GET  /castor-source-status`  → RPC `castor_admin_sources_status()` (rows + last_ingest por tabela).\n- `POST /castor-source-replace` → multipart upload. Se existe, `files.update` no mesmo `file_id` (NUNCA `files.delete`). Cria novo se ausente.\n- `POST /castor-source-ingest`  → `{ table, file_id }`. **Parse POSICIONAL** do CSV cru do Protheus (sem header, separador `;`, latin1/utf-8 auto). TRUNCATE+INSERT em transação. Para SF2010/SC5010 chama `castor_refresh_metrics_*()` no mesmo lote.\n\n**Tabelas ingestáveis:** `sa3010`, `cc2010`, `za7010`, `sf2010`, `sc5010` (sem SA1010 — não foi liberado).",
+        "height": 460,
+        "width": 880,
+        "color": 4
+      },
+      "id": "37f49f65-b1ef-4dc4-85d3-94105efdbbbc",
+      "name": "Sticky Note Header",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        39312,
+        20336
+      ]
+    },
+    {
+      "parameters": {
+        "path": "castor-source-list",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "9715d0a7-406f-4fab-9ef2-5763d9cce5c9",
+      "name": "Webhook - Source List",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        39584,
+        20704
+      ],
+      "webhookId": "castor-source-list"
+    },
+    {
+      "parameters": {
+        "resource": "fileFolder",
+        "limit": 200,
+        "filter": {
+          "folderId": {
+            "__rl": true,
+            "value": "1mFSgsUNhDCAsq73prFtD5b1RyqtXpIUx",
+            "mode": "id"
+          }
+        },
+        "options": {
+          "fields": [
+            "id",
+            "name",
+            "mimeType",
+            "size",
+            "modifiedTime",
+            "createdTime",
+            "webViewLink"
+          ]
+        }
+      },
+      "id": "923ec610-27d3-4c21-90f4-ef3d7a0ea831",
+      "name": "Drive: List folder",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [
+        39792,
+        20704
+      ],
+      "alwaysOutputData": true,
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "1yxLK6IGIPQiU21B",
+          "name": "Google Drive account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Apenas as 5 tabelas ingestáveis aparecem na UI.\nconst canonical = ['SA3010','CC2010','ZA7010','SF2010','SC5010'];\nconst labels = { SA3010:'Vendedores', CC2010:'Municípios', SC5010:'Pedidos cab.', SF2010:'NF cab.', ZA7010:'TMKT / Leads' };\nconst ingestable = new Set(canonical);\nconst byBase = {};\nfor (const it of $input.all()) {\n  const f = it.json || {};\n  if (!f.id || !f.name) continue;\n  if (f.mimeType === 'application/vnd.google-apps.folder') continue;\n  const name = String(f.name);\n  const dot = name.lastIndexOf('.');\n  const base = (dot > 0 ? name.slice(0, dot) : name).toUpperCase();\n  if (!ingestable.has(base)) continue;\n  const mod = f.modifiedTime || f.createdTime || '';\n  const prev = byBase[base];\n  if (!prev || (mod && mod > prev.mod)) {\n    byBase[base] = { id: f.id, name, url: f.webViewLink || ('https://drive.google.com/file/d/' + f.id + '/view'), size: Number(f.size || 0), mime: f.mimeType || '', mod };\n  }\n}\nconst out = canonical.map(base => {\n  const hit = byBase[base];\n  return { canonical: base, label: labels[base] || base, ingestable: true, filename: hit ? hit.name : null, drive_file_id: hit ? hit.id : null, drive_url: hit ? hit.url : null, mime: hit ? hit.mime : null, size: hit ? hit.size : 0, modified_at: hit ? hit.mod : null, missing: !hit };\n});\nreturn [{ json: { ok: true, data: { folder_id: '1mFSgsUNhDCAsq73prFtD5b1RyqtXpIUx', files: out }, error: null } }];"
+      },
+      "id": "3b4a9ec6-a98c-40e6-97c6-c8eb968e5692",
+      "name": "Build list response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        40016,
+        20704
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Access-Control-Allow-Origin",
+                "value": "*"
+              }
+            ]
+          }
+        }
+      },
+      "id": "7ffd21dd-febf-41b2-aa0e-7022cd3028b9",
+      "name": "Respond List",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        40240,
+        20704
+      ]
+    },
+    {
+      "parameters": {
+        "path": "castor-source-status",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "38ec3f11-f4e6-4273-b43e-ef400ce78650",
+      "name": "Webhook - Status",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        39584,
+        20928
+      ],
+      "webhookId": "castor-source-status"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT to_jsonb(s.*) AS row FROM castor_admin_sources_status() s;",
+        "options": {}
+      },
+      "id": "6c6ede09-026c-4e20-8e69-0b2b2857d10e",
+      "name": "PG: sources_status",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        39792,
+        20928
+      ],
+      "alwaysOutputData": true,
+      "credentials": {
+        "postgres": {
+          "id": "jFjeYH6Nt3aRNkoM",
+          "name": "Supabase_database"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { ok: true, data: { tables: $input.all().map(i => (i.json && i.json.row) || i.json).filter(Boolean) }, error: null } }}",
+        "options": {
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Access-Control-Allow-Origin",
+                "value": "*"
+              }
+            ]
+          }
+        }
+      },
+      "id": "83d34066-c7cb-4289-a24f-23b41082b63d",
+      "name": "Respond Status",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        40240,
+        20928
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "castor-source-replace",
+        "responseMode": "responseNode",
+        "options": {
+          "binaryPropertyName": "file"
+        }
+      },
+      "id": "a52eaa14-88f9-430c-a52f-129d0babd74a",
+      "name": "Webhook - Source Replace",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        39584,
+        21168
+      ],
+      "webhookId": "castor-source-replace"
+    },
+    {
+      "parameters": {
+        "jsCode": "const canonical = new Set(['SA3010','CC2010','SF4010','SX5010','SC5010','SC6010','SF2010','SD2010','SZ1010','ZA7010','FATOTEMPO','SB1010','SBM010']);\nconst item = $input.first();\nconst body = (item.json && item.json.body) ? item.json.body : item.json;\nconst headers = (item.json && (item.json.headers || (item.json.request && item.json.request.headers))) || {};\nconst params = (item.json && (item.json.params || item.json.query)) || {};\nconst raw = (body && (body.filename || (body.fields && body.fields.filename))) || item.json.filename || params.filename || headers['x-filename'] || headers['X-Filename'] || '';\nif (!raw) return [{ json: { ok: false, error: 'filename é obrigatório (ex.: SA3010 ou SA3010.csv)' } }];\nconst rawStr = String(raw);\nconst dot = rawStr.lastIndexOf('.');\nconst baseUpper = (dot > 0 ? rawStr.slice(0, dot) : rawStr).toUpperCase();\nif (!canonical.has(baseUpper)) return [{ json: { ok: false, error: 'nome canônico inválido: ' + baseUpper } }];\nconst binMap = item.binary || {};\nconst keys = Object.keys(binMap);\nlet bin = binMap.file || null;\nlet binKey = bin ? 'file' : null;\nif (!bin) { for (const k of keys) { if (binMap[k]) { bin = binMap[k]; binKey = k; break; } } }\nif (!bin) return [{ json: { ok: false, error: 'binário ausente — chaves disponíveis: ' + (keys.join(',') || '(nenhuma)') + '.' } }];\nconst newBinary = Object.assign({}, binMap);\nif (binKey !== 'file') { newBinary.file = bin; delete newBinary[binKey]; }\nconst binName = String(bin.fileName || '');\nconst binDot = binName.lastIndexOf('.');\nlet ext = binDot > 0 ? binName.slice(binDot + 1).toLowerCase() : '';\nconst mime = String(bin.mimeType || '').toLowerCase();\nif (!ext) { if (mime.includes('csv')) ext = 'csv'; else if (mime.includes('spreadsheetml.sheet') || mime.includes('xlsx')) ext = 'xlsx'; else if (mime.includes('ms-excel') || mime.includes('excel')) ext = 'xls'; }\nif (!['csv','xlsx','xls'].includes(ext)) return [{ json: { ok: false, error: 'Formato não suportado: ' + (ext || '(vazia)') + '. Aceitos: CSV, XLSX, XLS.' } }];\nconst finalName = baseUpper + '.' + ext;\nconst uploaded_by = (body && (body.user_id || (body.fields && body.fields.user_id))) || params.user_id || headers['x-user-id'] || null;\nreturn [{ json: { ok: true, canonical: baseUpper, filename: finalName, ext, uploaded_by, mime_out: ext === 'csv' ? 'text/csv' : (ext === 'xls' ? 'application/vnd.ms-excel' : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet') }, binary: newBinary }];"
+      },
+      "id": "2540f8be-6995-4d8c-9d1d-1571e6f9c04c",
+      "name": "Validate replace",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        39792,
+        21168
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "c022rv1",
+              "leftValue": "={{ $json.ok }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "0f3c95ca-55dd-4a8a-b0ef-1282ce15ce98",
+      "name": "Replace valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        40016,
+        21168
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "fileFolder",
+        "queryString": "={{ $json.canonical }}",
+        "filter": {
+          "folderId": {
+            "__rl": true,
+            "value": "1mFSgsUNhDCAsq73prFtD5b1RyqtXpIUx",
+            "mode": "id"
+          }
+        },
+        "options": {
+          "fields": [
+            "*"
+          ]
+        }
+      },
+      "id": "90b94265-70cf-4e69-b73b-26c98a16df44",
+      "name": "Drive: Find existing",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [
+        40240,
+        21088
+      ],
+      "alwaysOutputData": true,
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "1yxLK6IGIPQiU21B",
+          "name": "Google Drive account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const v = $('Validate replace').first().json;\nconst bin = $('Validate replace').first().binary;\nconst targetBase = String(v.canonical).toUpperCase();\nconst items = $input.all();\nconst hit = items.find(it => {\n  const f = it.json || {};\n  if (!f.id || !f.name) return false;\n  if (f.mimeType === 'application/vnd.google-apps.folder') return false;\n  const name = String(f.name);\n  const dot = name.lastIndexOf('.');\n  const base = (dot > 0 ? name.slice(0, dot) : name).toUpperCase();\n  return base === targetBase;\n});\nreturn [{ json: Object.assign({}, v, { existing_id: hit ? hit.id : '', existing_name: hit ? hit.name : '' }), binary: bin }];"
+      },
+      "id": "9865c25e-6ab6-494d-8181-a473f1c75399",
+      "name": "Pick existing match",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        40464,
+        21088
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "c022ex1",
+              "leftValue": "={{ $json.existing_id }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "f1a3b10a-f62a-4b14-8ee2-caf5e30767f9",
+      "name": "Has existing?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        40672,
+        21088
+      ]
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "=https://www.googleapis.com/upload/drive/v3/files/{{ $json.existing_id }}?uploadType=media&supportsAllDrives=true",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleDriveOAuth2Api",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "={{ $json.mime_out }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "binaryData",
+        "inputDataFieldName": "file",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "id": "1c51e759-cac8-449a-9e59-f6586be27943",
+      "name": "Drive: Update content",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        40896,
+        21008
+      ],
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "1yxLK6IGIPQiU21B",
+          "name": "Google Drive account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "=https://www.googleapis.com/drive/v3/files/{{ $json.id }}?supportsAllDrives=true",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleDriveOAuth2Api",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ name: $('Pick existing match').first().json.filename }) }}",
+        "options": {}
+      },
+      "id": "99711dff-4626-4f2e-bedc-74cc74739de6",
+      "name": "Drive: Rename (canonical)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        41120,
+        21008
+      ],
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "1yxLK6IGIPQiU21B",
+          "name": "Google Drive account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const v = $('Validate replace').first().json;\nconst bin = $('Validate replace').first().binary;\nreturn [{ json: v, binary: bin }];"
+      },
+      "id": "7042a378-92e9-4aec-9848-977a29a8564c",
+      "name": "Reattach binary (create)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        40896,
+        21184
+      ]
+    },
+    {
+      "parameters": {
+        "inputDataFieldName": "file",
+        "name": "={{ $json.filename }}",
+        "driveId": {
+          "__rl": true,
+          "mode": "list",
+          "value": "My Drive"
+        },
+        "folderId": {
+          "__rl": true,
+          "value": "1mFSgsUNhDCAsq73prFtD5b1RyqtXpIUx",
+          "mode": "id"
+        },
+        "options": {}
+      },
+      "id": "d923b180-3e24-465b-ab6f-0ffd2a3495d3",
+      "name": "Drive: Upload new",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [
+        41120,
+        21184
+      ],
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "1yxLK6IGIPQiU21B",
+          "name": "Google Drive account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const v = $('Validate replace').first().json;\nconst existing = $('Pick existing match').first().json.existing_id || null;\nlet fileId = null;\nlet url = null;\nif (existing) {\n  const upd = $('Drive: Update content').first().json || {};\n  fileId = upd.id || existing;\n  url = 'https://drive.google.com/file/d/' + fileId + '/view';\n} else {\n  const d = $('Drive: Upload new').first().json || {};\n  fileId = d.id;\n  url = d.webViewLink || ('https://drive.google.com/file/d/' + fileId + '/view');\n}\nreturn [{ json: { ok: true, data: { canonical: v.canonical, filename: v.filename, drive_file_id: fileId, drive_url: url, replaced: !!existing, previous_id: existing }, error: null } }];"
+      },
+      "id": "1507448c-5454-4baa-9264-d0fb747d80cd",
+      "name": "Build replace result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        41344,
+        21088
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Access-Control-Allow-Origin",
+                "value": "*"
+              }
+            ]
+          }
+        }
+      },
+      "id": "ab928e11-251c-4f3d-87da-38dd827f323d",
+      "name": "Respond Replace OK",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        41552,
+        21088
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { ok: false, data: null, error: $json.error || 'invalid input' } }}",
+        "options": {
+          "responseCode": 400,
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Access-Control-Allow-Origin",
+                "value": "*"
+              }
+            ]
+          }
+        }
+      },
+      "id": "6c7d8bd2-e764-4e10-873e-bfe11e44656c",
+      "name": "Respond Replace Error",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        40240,
+        21328
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "castor-source-ingest",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "e9059918-80ab-42a5-ac27-e9dc16bf4efb",
+      "name": "Webhook - Ingest",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        39584,
+        21600
+      ],
+      "webhookId": "castor-source-ingest"
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = ($json && $json.body) ? $json.body : $json;\nconst tableRaw = String(body && (body.table || body.canonical) || '').toLowerCase();\nconst fileId = String(body && (body.file_id || body.drive_file_id) || '').trim();\nconst uploaded_by = body && body.uploaded_by ? String(body.uploaded_by) : null;\nconst allowed = new Set(['sa3010','cc2010','za7010','sf2010','sc5010']);\nif (!allowed.has(tableRaw)) return [{ json: { ok: false, error: 'table inválida (use sa3010|cc2010|za7010|sf2010|sc5010)' } }];\nif (!fileId) return [{ json: { ok: false, error: 'file_id é obrigatório' } }];\nreturn [{ json: { ok: true, table: tableRaw, file_id: fileId, uploaded_by } }];"
+      },
+      "id": "d2d090b0-c471-4fa6-a84b-4ae90a536ec6",
+      "name": "Validate ingest",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        39792,
+        21600
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "c022ig1",
+              "leftValue": "={{ $json.ok }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "9816f3cc-55b0-4e36-879e-41096a883f9c",
+      "name": "Ingest valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        40016,
+        21600
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT castor_ingest_log_start({{ \"'\" + $json.table.replace(/'/g, \"''\") + \"'\" }}, {{ \"'\" + $json.file_id.replace(/'/g, \"''\") + \"'\" }}, NULL, {{ $json.uploaded_by ? \"'\" + $json.uploaded_by.replace(/'/g, \"''\") + \"'::uuid\" : 'NULL' }}) AS ingest_id;",
+        "options": {}
+      },
+      "id": "716fced2-e510-4c1f-9143-807ba0996b0e",
+      "name": "PG: ingest_log_start",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        40240,
+        21520
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "jFjeYH6Nt3aRNkoM",
+          "name": "Supabase_database"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const v = $('Validate ingest').first().json;\nconst log = $input.first().json || {};\nreturn [{ json: Object.assign({}, v, { ingest_id: log.ingest_id || null, t_start: Date.now() }) }];"
+      },
+      "id": "4c0b7366-1f39-4d2e-8639-a0d123e7601d",
+      "name": "Carry ingest ctx",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        40464,
+        21520
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "download",
+        "fileId": {
+          "__rl": true,
+          "value": "={{ $json.file_id }}",
+          "mode": "id"
+        },
+        "options": {
+          "binaryPropertyName": "file"
+        }
+      },
+      "id": "70623b96-c359-4089-80aa-688602ca6d39",
+      "name": "Drive: Download CSV",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [
+        40672,
+        21520
+      ],
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "1yxLK6IGIPQiU21B",
+          "name": "Google Drive account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Decide formato SEM carregar o binário (evita OOM em dumps grandes).\n// Usa mimeType + extensão do filename, ambos já presentes no metadata do binary do Drive.\nconst v = $('Carry ingest ctx').first().json;\nconst bin = ($input.first().binary || {}).file || {};\nconst mime = String(bin.mimeType || '').toLowerCase();\nconst name = String(bin.fileName || '').toLowerCase();\nlet format = 'csv';\nif (mime.includes('spreadsheetml') || mime.includes('openxmlformats') || name.endsWith('.xlsx')) format = 'xlsx';\nelse if (mime.includes('ms-excel') || name.endsWith('.xls')) format = 'xls';\nelse if (mime.includes('pdf') || name.endsWith('.pdf')) format = 'pdf';\nelse if (mime.includes('zip') || name.endsWith('.zip')) format = 'xlsx';\nreturn [{ json: Object.assign({}, v, { format, file_name: bin.fileName || null, mime_type: bin.mimeType || null }), binary: $input.first().binary }];"
+      },
+      "id": "ca589194-4b61-4f40-bc6c-a9cdf0e82c80",
+      "name": "Sniff format",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        40784,
+        21520
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "c022fc1",
+              "leftValue": "={{ $json.format }}",
+              "rightValue": "csv",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "3e164443-ee03-4c00-885d-f1c7ed6244c5",
+      "name": "Is CSV?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        40912,
+        21520
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "xlsx",
+        "binaryPropertyName": "file",
+        "options": {
+          "headerRow": false,
+          "includeEmptyCells": true
+        }
+      },
+      "id": "92426850-abce-4e4d-97b8-882e1da1ef96",
+      "name": "Extract From File",
+      "type": "n8n-nodes-base.extractFromFile",
+      "typeVersion": 1,
+      "position": [
+        41056,
+        21680
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Converte itens vindos de Extract From File (xlsx) em UM item com 'rawText'\n// formatado como CSV ;-separated, preservando a ORDEM EXCEL de colunas\n// (A,B,...,Z,AA,AB,...) — não a ordem lexicográfica.\nfunction colKey(s) {\n  s = String(s);\n  if (/^[A-Z]+$/.test(s)) {\n    let n = 0;\n    for (const ch of s) n = n*26 + (ch.charCodeAt(0) - 64);\n    return n;\n  }\n  const m = /(\\d+)/.exec(s);\n  return m ? parseInt(m[1], 10) + 100000 : 999999;\n}\nconst ctx = $('Carry ingest ctx').first().json;\nconst items = $input.all();\nconst lines = [];\nfor (const it of items) {\n  const obj = it.json || {};\n  const keys = Object.keys(obj).sort((a,b) => colKey(a) - colKey(b));\n  const cells = keys.map(k => {\n    const v = obj[k];\n    if (v === null || v === undefined) return '';\n    if (v instanceof Date) {\n      const y = v.getUTCFullYear();\n      const m = String(v.getUTCMonth()+1).padStart(2,'0');\n      const d = String(v.getUTCDate()).padStart(2,'0');\n      return y + '-' + m + '-' + d;\n    }\n    return String(v);\n  });\n  lines.push(cells.join(';'));\n}\nreturn [{ json: Object.assign({}, ctx, { rawText: lines.join('\\n'), format: 'xlsx', xlsx_rows: lines.length }) }];"
+      },
+      "id": "a692ebb3-1a53-471d-9515-a7d7fd9ad1ab",
+      "name": "XLSX rows to text",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        41168,
+        21680
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parser POSICIONAL com STREAMING em batches para evitar OOM.\n// Fontes aceitas:\n//   a) Texto extraído de XLSX/XLS via $json.rawText (branch XLSX) — itera a string.\n//   b) Binário 'file' (branch CSV) — lê em chunks via getBinaryStream, sem materializar o arquivo inteiro.\n// Emite UM item por batch de 2000 rows. PG: apply ingest executa cada item sequencialmente.\n// O 1o item inclui TRUNCATE; o último inclui SELECT castor_refresh_metrics_* (quando aplicável).\n\nconst ctx = $('Carry ingest ctx').first().json;\nconst table = ctx.table;\nconst inJson = $input.first().json || {};\n\nconst MAPS = {\n  sa3010:  { cols: ['a3_cod','a3_nome','a3_nreduz'],            pos: [2,3,4] },\n  cc2010:  { cols: ['cc2_est','cc2_codmun','cc2_mun'],          pos: [2,3,4] },\n  za7010:  { cols: ['za7_data','za7_hora','za7_operad','za7_nomeop','za7_assunto','za7_contato','za7_cliente','za7_nome_cli','za7_vend','za7_compl'], pos: [7,8,2,3,6,13,14,15,16,19], types: { za7_data:'date' } },\n  sf2010:  { cols: ['f2_doc','f2_serie','f2_cliente','f2_loja','f2_emissao','f2_valor'], pos: [2,3,4,5,8,14], types: { f2_emissao:'date', f2_valor:'num' } },\n  sc5010:  { cols: ['c5_num','c5_cliente','c5_loja','c5_nome','c5_vend','c5_emissao','c5_le_raw'], pos: [3,4,5,10,13,42,29], types: { c5_emissao:'date' } }\n};\nconst spec = MAPS[table];\nif (!spec) return [{ json: { ok:false, table, error:'tabela sem mapa de posições: '+table, is_first:true, is_last:true, batch_index:0, rows_in_batch:0, sql:'SELECT 1' } }];\n\nconst tableSql = 'castor_src_' + table;\nconst colsLine = spec.cols.join(',');\nconst refreshSql = (table === 'sf2010') ? 'SELECT castor_refresh_metrics_sf();\\nSELECT castor_refresh_metrics_alltime();\\n' : (table === 'sc5010') ? 'SELECT castor_refresh_metrics_sc();\\nSELECT castor_refresh_sc5_address();\\nSELECT castor_refresh_metrics_alltime();\\n' : '';\nconst BATCH = 2000;\nconst NEED = Math.max.apply(null, spec.pos);\nconst colSet = new Set(spec.cols.map(c => c.toLowerCase()));\n\nfunction splitLine(line, sep){\n  const out = []; let cur = ''; let inQ = false;\n  for (let i = 0; i < line.length; i++){\n    const ch = line[i];\n    if (ch === '\"'){ if (inQ && line[i+1] === '\"'){ cur += '\"'; i++; } else inQ = !inQ; }\n    else if (ch === sep && !inQ){ out.push(cur); cur = ''; }\n    else cur += ch;\n  }\n  out.push(cur);\n  for (let i = 0; i < out.length; i++) out[i] = out[i].trim();\n  return out;\n}\nfunction parseProtheusDate(s){\n  s = String(s||'').trim();\n  let m = s.match(/^(\\d{4})-(\\d{2})-(\\d{2})/); if (m) return m[1]+'-'+m[2]+'-'+m[3];\n  m = s.match(/^(\\d{2})\\/(\\d{2})\\/(\\d{4})/); if (m) return m[3]+'-'+m[2]+'-'+m[1];\n  const d = s.replace(/[^0-9]/g,'');\n  if (d.length === 8){ const y=+d.slice(0,4), mo=+d.slice(4,6), da=+d.slice(6,8); if (y&&mo&&da) return d.slice(0,4)+'-'+d.slice(4,6)+'-'+d.slice(6,8); }\n  return null;\n}\nfunction parseNum(s){\n  if (typeof s === 'number') return Number.isFinite(s) ? s : 0;\n  s = String(s||'').trim();\n  if (s.includes(',') && s.includes('.')) s = s.replace(/\\./g,'').replace(',','.');\n  else if (s.includes(',')) s = s.replace(',','.');\n  s = s.replace(/[^0-9.\\-]/g,'');\n  const n = +s; return Number.isFinite(n) ? n : 0;\n}\nfunction sqlEsc(s){ if (s===null||s===undefined||s==='') return 'NULL'; return \"'\"+String(s).replace(/'/g,\"''\")+\"'\"; }\nfunction sqlDate(s){ return s ? (\"'\"+s+\"'::date\") : 'NULL'; }\nfunction sqlNum(n){ const x=+n; return Number.isFinite(x) ? String(x) : '0'; }\nfunction detectSep(line){\n  const c1=(line.match(/;/g)||[]).length, c2=(line.match(/,/g)||[]).length, c3=(line.match(/\\t/g)||[]).length;\n  if (c3>c1 && c3>c2) return '\\t'; if (c2>c1) return ','; return ';';\n}\n\n// Estado de parsing\nlet sep = null;\nlet headerChecked = false;\nlet headerSkipped = false;\nlet totalLines = 0;\nlet totalIn = 0;\nlet totalSkipped = 0;\nlet sampleRaw = '';\nlet batchRows = [];\nlet batchIndex = 0;\nlet firstEmitted = false;\nconst items = [];\n\nfunction flushBatch(isLast){\n  const isFirst = !firstEmitted;\n  if (batchRows.length === 0 && !isFirst && !isLast) return;\n  let sql = '';\n  if (isFirst) sql += 'TRUNCATE TABLE ' + tableSql + ' RESTART IDENTITY;\\n';\n  if (batchRows.length > 0){\n    sql += 'INSERT INTO ' + tableSql + '(' + colsLine + ') VALUES\\n';\n    sql += batchRows.join(',\\n') + ';\\n';\n  }\n  if (isLast) sql += refreshSql;\n  items.push({ json: { ok:true, table, sql, is_first:isFirst, is_last: !!isLast, batch_index: batchIndex, rows_in_batch: batchRows.length, sample_raw: isFirst ? sampleRaw.slice(0,400) : '' } });\n  firstEmitted = true;\n  batchIndex++;\n  batchRows = [];\n}\n\nfunction handleLine(rawLine){\n  if (totalLines === 0 && rawLine.length > 0 && rawLine.charCodeAt(0) === 0xFEFF) rawLine = rawLine.slice(1);\n  totalLines++;\n  if (!rawLine || rawLine.length === 0) return;\n  // trim só para sep-detection/header; mantém raw para split\n  const trimmed = rawLine.replace(/^\\s+|\\s+$/g,'');\n  if (trimmed === '') return;\n  if (sep === null) sep = detectSep(rawLine);\n  if (!headerChecked){\n    headerChecked = true;\n    const parts = splitLine(rawLine, sep);\n    let isHdr = false;\n    for (let i = 0; i < parts.length; i++){ if (colSet.has(parts[i].toLowerCase())) { isHdr = true; break; } }\n    if (isHdr) { headerSkipped = true; return; }\n  }\n  if (!sampleRaw) sampleRaw = rawLine;\n  const cols = splitLine(rawLine, sep);\n  if (cols.length < NEED){ totalSkipped++; return; }\n  totalIn++;\n  const vals = new Array(spec.cols.length);\n  for (let ci = 0; ci < spec.cols.length; ci++){\n    const colName = spec.cols[ci];\n    const idx = spec.pos[ci] - 1;\n    const raw = cols[idx] != null ? cols[idx] : '';\n    const t = spec.types && spec.types[colName];\n    if (t === 'date') vals[ci] = sqlDate(parseProtheusDate(raw));\n    else if (t === 'num') vals[ci] = sqlNum(parseNum(raw));\n    else vals[ci] = sqlEsc(raw);\n  }\n  batchRows.push('(' + vals.join(',') + ')');\n  if (batchRows.length >= BATCH) flushBatch(false);\n}\n\nif (inJson.rawText && typeof inJson.rawText === 'string' && inJson.rawText.length > 0){\n  // XLSX branch: itera a string sem split global (evita 2x mem)\n  const text = inJson.rawText;\n  let start = 0;\n  for (let i = 0; i <= text.length; i++){\n    if (i === text.length || text.charCodeAt(i) === 10){\n      let end = i; if (end > start && text.charCodeAt(end-1) === 13) end--;\n      handleLine(text.slice(start, end));\n      start = i + 1;\n    }\n  }\n} else {\n  // CSV branch: Code Node n8n não suporta streams — usamos getBinaryDataBuffer.\n  // Para minimizar pico: (a) iteramos bytes direto sem converter o buffer inteiro\n  // em string; (b) emitimos linha-a-linha via toString(start,end) só do trecho;\n  // (c) liberamos a referência logo após terminar para o GC recuperar antes do flush.\n  let buf = await this.helpers.getBinaryDataBuffer(0, 'file');\n  const sampleLen = Math.min(buf.length, 16384);\n  const sample = buf.slice(0, sampleLen).toString('utf8');\n  const encoding = sample.indexOf('\\ufffd') !== -1 ? 'latin1' : 'utf8';\n  let start = 0;\n  for (let i = 0; i < buf.length; i++){\n    if (buf[i] === 0x0a){\n      let end = i;\n      if (end > start && buf[end-1] === 0x0d) end--;\n      handleLine(buf.toString(encoding, start, end));\n      start = i + 1;\n    }\n  }\n  if (start < buf.length){ handleLine(buf.toString(encoding, start, buf.length)); }\n  buf = null;\n}\n\nflushBatch(true);\nif (items.length === 0){\n  items.push({ json: { ok:false, table, error:'arquivo vazio ou sem linhas válidas', is_first:true, is_last:true, batch_index:0, rows_in_batch:0, sql:'SELECT 1', sample_raw:'' } });\n}\nitems[0].json.total_lines = totalLines;\nitems[0].json.total_skipped = totalSkipped;\nitems[0].json.header_skipped = headerSkipped;\nitems[0].json.sep = sep;\nitems[0].json.source_kind = inJson.rawText ? 'xlsx' : 'csv';\nitems[items.length-1].json.is_last = true;\nreturn items;"
+      },
+      "id": "7a1167f8-a23b-4acc-a5bb-25c4ef84d9cb",
+      "name": "Parse positional",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        41296,
+        21504
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "={{ $json.sql }}",
+        "options": {
+          "queryReplacement": ""
+        }
+      },
+      "id": "4ea8d351-e9bf-47ac-bc9d-2933683fb9a0",
+      "name": "PG: apply ingest",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        41520,
+        21504
+      ],
+      "alwaysOutputData": true,
+      "credentials": {
+        "postgres": {
+          "id": "jFjeYH6Nt3aRNkoM",
+          "name": "Supabase_database"
+        }
+      },
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const ctx = $('Carry ingest ctx').first().json;\nconst parseItems = $('Parse positional').all();\nconst pgItems = $('PG: apply ingest').all();\nlet rowsIn = 0;\nfor (const it of parseItems) rowsIn += (it.json && it.json.rows_in_batch) || 0;\nlet err = null;\nconst parseErr = parseItems.find(x => x.json && x.json.ok === false);\nif (parseErr) err = parseErr.json.error;\nif (!err){\n  for (const it of pgItems){\n    if (it && it.error){ err = String(it.error.message || it.error); break; }\n    if (it && it.json && it.json.error){ err = String(it.json.error); break; }\n  }\n}\nif (!err && rowsIn === 0){\n  const first = (parseItems[0] && parseItems[0].json) || {};\n  err = 'arquivo vazio ou só com linhas inválidas — total_lines=' + (first.total_lines||0) + ' skipped=' + (first.total_skipped||0) + ' sample=' + String(first.sample_raw||'').slice(0,200);\n}\nconst rowsOut = err ? 0 : rowsIn;\nconst duration = Date.now() - (ctx.t_start || Date.now());\nconst ok = !err;\nconst sample_raw = (parseItems[0] && parseItems[0].json && parseItems[0].json.sample_raw) || '';\nreturn [{ json: { ingest_id: ctx.ingest_id, rows_in: rowsIn, rows_out: rowsOut, duration_ms: duration, ok, error: err, table: ctx.table, sample_raw, batches: parseItems.length } }];"
+      },
+      "id": "f1515212-0b21-42af-baa8-087f92ed335a",
+      "name": "Build finish payload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        41744,
+        21504
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT castor_ingest_log_finish({{ \"'\" + $json.ingest_id + \"'::uuid\" }}, {{ $json.rows_in }}, {{ $json.rows_out }}, {{ $json.duration_ms }}, {{ $json.ok }}, {{ $json.error ? \"'\" + String($json.error).replace(/'/g, \"''\") + \"'\" : 'NULL' }});",
+        "options": {}
+      },
+      "id": "573248f4-52c6-4372-841e-e88d8548ac36",
+      "name": "PG: ingest_log_finish",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        41936,
+        21504
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "jFjeYH6Nt3aRNkoM",
+          "name": "Supabase_database"
+        }
+      },
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { ok: $('Build finish payload').first().json.ok, data: { ingest_id: $('Build finish payload').first().json.ingest_id, table: $('Build finish payload').first().json.table, rows_in: $('Build finish payload').first().json.rows_in, rows_out: $('Build finish payload').first().json.rows_out, duration_ms: $('Build finish payload').first().json.duration_ms, sample_raw: $('Build finish payload').first().json.sample_raw }, error: $('Build finish payload').first().json.error } }}",
+        "options": {
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Access-Control-Allow-Origin",
+                "value": "*"
+              }
+            ]
+          }
+        }
+      },
+      "id": "d0771316-715d-47a0-b4b7-64adeff24dbf",
+      "name": "Respond Ingest",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        42144,
+        21504
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { ok: false, data: null, error: $json.error || 'invalid input' } }}",
+        "options": {
+          "responseCode": 400,
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Access-Control-Allow-Origin",
+                "value": "*"
+              }
+            ]
+          }
+        }
+      },
+      "id": "b7b543ac-16a0-4c74-965e-bbe7ec2af20a",
+      "name": "Respond Ingest Error",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        40240,
+        21744
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## 🚀 Streaming Ingest (browser-driven)\n\n3 endpoints sem download/parse no n8n. Pico de memória <2MB por request.\n\n- `POST /castor-source-ingest-init`  → `{table, drive_file_id?, uploaded_by?}` → TRUNCATE + log_start → `{ingest_id}`\n- `POST /castor-source-ingest-batch` → `{ingest_id, table, rows:[[...]]}` → INSERT puro (recomendado: 1000 rows/batch)\n- `POST /castor-source-ingest-finish`→ `{ingest_id, table, rows_in, duration_ms, ok, error?}` → refresh metrics + log_finish\n\nFront parseia o CSV via `File.stream()` e envia em lotes JSON pequenos.",
+        "height": 300,
+        "width": 760,
+        "color": 5
+      },
+      "id": "a1b2c3d4-1111-4111-8111-111111111111",
+      "name": "Sticky Note Streaming",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        39312,
+        21960
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "castor-source-ingest-init",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "a1b2c3d4-2222-4222-8222-222222222222",
+      "name": "Webhook - Ingest Init",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        39584,
+        22300
+      ],
+      "webhookId": "castor-source-ingest-init"
+    },
+    {
+      "parameters": {
+        "jsCode": "const body=($json&&$json.body)?$json.body:$json;\nconst t=String(body&&(body.table||body.canonical)||'').toLowerCase();\nconst fid=body&&(body.drive_file_id||body.file_id)?String(body.drive_file_id||body.file_id):null;\nconst ub=body&&body.uploaded_by?String(body.uploaded_by):null;\nconst allowed=new Set(['sa3010','cc2010','za7010','sf2010','sc5010']);\nif(!allowed.has(t))return[{json:{ok:false,error:'table inválida (use sa3010|cc2010|za7010|sf2010|sc5010)'}}];\nreturn[{json:{ok:true,table:t,drive_file_id:fid,uploaded_by:ub}}];"
+      },
+      "id": "a1b2c3d4-3333-4333-8333-333333333333",
+      "name": "Validate init",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        39792,
+        22300
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "cinit1",
+              "leftValue": "={{ $json.ok }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "a1b2c3d4-4444-4444-8444-444444444444",
+      "name": "Init valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        40016,
+        22300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "DELETE FROM castor_src_{{ $json.table }};\nSELECT castor_ingest_log_start('{{ $json.table }}', {{ $json.drive_file_id ? \"'\" + String($json.drive_file_id).replace(/'/g, \"''\") + \"'\" : 'NULL' }}, NULL, {{ $json.uploaded_by ? \"'\" + String($json.uploaded_by).replace(/'/g, \"''\") + \"'::uuid\" : 'NULL' }}) AS ingest_id;",
+        "options": {}
+      },
+      "id": "a1b2c3d4-5555-4555-8555-555555555555",
+      "name": "PG: init",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        40240,
+        22220
+      ],
+      "alwaysOutputData": true,
+      "credentials": {
+        "postgres": {
+          "id": "jFjeYH6Nt3aRNkoM",
+          "name": "Supabase_database"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const v=$('Validate init').first().json;\nconst log=$input.first().json||{};\nreturn[{json:{ok:true,data:{ingest_id:log.ingest_id||null,table:v.table,started_at:new Date().toISOString()},error:null}}];"
+      },
+      "id": "a1b2c3d4-6666-4666-8666-666666666666",
+      "name": "Build init response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        40464,
+        22220
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Access-Control-Allow-Origin",
+                "value": "*"
+              }
+            ]
+          }
+        }
+      },
+      "id": "a1b2c3d4-7777-4777-8777-777777777777",
+      "name": "Respond Init",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        40688,
+        22220
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { ok: false, data: null, error: $json.error || 'invalid input' } }}",
+        "options": {
+          "responseCode": 400,
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Access-Control-Allow-Origin",
+                "value": "*"
+              }
+            ]
+          }
+        }
+      },
+      "id": "a1b2c3d4-8888-4888-8888-888888888888",
+      "name": "Respond Init Error",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        40240,
+        22440
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "castor-source-ingest-batch",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "b1b2c3d4-1111-4111-8111-111111111111",
+      "name": "Webhook - Ingest Batch",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        39584,
+        22600
+      ],
+      "webhookId": "castor-source-ingest-batch"
+    },
+    {
+      "parameters": {
+        "jsCode": "const body=($json&&$json.body)?$json.body:$json;\nconst ingestId=String(body.ingest_id||'');\nconst table=String(body.table||'').toLowerCase();\nconst rows=Array.isArray(body.rows)?body.rows:[];\nconst allowed=new Set(['sa3010','cc2010','za7010','sf2010','sc5010']);\nif(!allowed.has(table))return[{json:{ok:false,error:'table inválida',sql:'SELECT 1',rows_inserted:0}}];\nif(!ingestId)return[{json:{ok:false,error:'ingest_id obrigatório',sql:'SELECT 1',rows_inserted:0}}];\nconst MAPS={sa3010:{cols:['a3_cod','a3_nome','a3_nreduz'],types:['str','str','str']},cc2010:{cols:['cc2_est','cc2_codmun','cc2_mun'],types:['str','str','str']},za7010:{cols:['za7_data','za7_hora','za7_operad','za7_nomeop','za7_assunto','za7_contato','za7_cliente','za7_nome_cli','za7_vend','za7_compl'],types:['date','str','str','str','str','str','str','str','str','str']},sf2010:{cols:['f2_doc','f2_serie','f2_cliente','f2_loja','f2_emissao','f2_valor'],types:['str','str','str','str','date','num']},sc5010:{cols:['c5_num','c5_cliente','c5_loja','c5_nome','c5_vend','c5_emissao','c5_le_raw'],types:['str','str','str','str','str','date','str']}};\nconst spec=MAPS[table];const n=spec.cols.length;\nfunction sqlEsc(s){if(s===null||s===undefined||s==='')return'NULL';return\"'\"+String(s).replace(/'/g,\"''\")+\"'\";}\nfunction sqlDate(s){if(!s)return'NULL';const m=String(s).match(/^(\\d{4})-(\\d{2})-(\\d{2})$/);return m?\"'\"+s+\"'::date\":'NULL';}\nfunction sqlNum(v){const x=Number(v);return Number.isFinite(x)?String(x):'0';}\nconst values=[];\nfor(const r of rows){if(!Array.isArray(r)||r.length<n)continue;const parts=new Array(n);for(let i=0;i<n;i++){const t=spec.types[i];const v=r[i];if(t==='date')parts[i]=sqlDate(v);else if(t==='num')parts[i]=sqlNum(v);else parts[i]=sqlEsc(v);}values.push('('+parts.join(',')+')');}\nif(values.length===0)return[{json:{ok:true,ingest_id:ingestId,table,rows_inserted:0,sql:'SELECT 1'}}];\nconst sql='INSERT INTO castor_src_'+table+'('+spec.cols.join(',')+') VALUES '+values.join(',')+';';\nreturn[{json:{ok:true,ingest_id:ingestId,table,rows_inserted:values.length,sql}}];"
+      },
+      "id": "b1b2c3d4-2222-4222-8222-222222222222",
+      "name": "Build batch SQL",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        39792,
+        22600
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "={{ $json.sql }}",
+        "options": {
+          "queryReplacement": ""
+        }
+      },
+      "id": "b1b2c3d4-3333-4333-8333-333333333333",
+      "name": "PG: batch",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        40016,
+        22600
+      ],
+      "alwaysOutputData": true,
+      "credentials": {
+        "postgres": {
+          "id": "jFjeYH6Nt3aRNkoM",
+          "name": "Supabase_database"
+        }
+      },
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const parse=$('Build batch SQL').first().json||{};\nconst pgItems=$input.all();\nlet err=parse.error||null;\nif(!err){for(const it of pgItems){if(it&&it.error){err=String(it.error.message||it.error);break;}if(it&&it.json&&it.json.error){err=String(it.json.error);break;}}}\nreturn[{json:{ok:!err,data:{rows_inserted:err?0:(parse.rows_inserted||0),ingest_id:parse.ingest_id||null},error:err}}];"
+      },
+      "id": "b1b2c3d4-4444-4444-8444-444444444444",
+      "name": "Build batch response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        40240,
+        22600
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Access-Control-Allow-Origin",
+                "value": "*"
+              }
+            ]
+          }
+        }
+      },
+      "id": "b1b2c3d4-5555-4555-8555-555555555555",
+      "name": "Respond Batch",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        40464,
+        22600
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "castor-source-ingest-finish",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "c1b2c3d4-1111-4111-8111-111111111111",
+      "name": "Webhook - Ingest Finish",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        39584,
+        22900
+      ],
+      "webhookId": "castor-source-ingest-finish"
+    },
+    {
+      "parameters": {
+        "jsCode": "const body=($json&&$json.body)?$json.body:$json;\nconst ingestId=String(body.ingest_id||'');\nconst table=String(body.table||'').toLowerCase();\nconst rowsIn=Number(body.rows_in||0);\nconst duration=Number(body.duration_ms||0);\nconst okFlag=body.ok!==false;\nconst clientErr=body.error?String(body.error):null;\nif(!ingestId)return[{json:{ok:false,error:'ingest_id obrigatório',sql:'SELECT 1'}}];\nconst refreshFns=table==='sf2010'?['castor_refresh_metrics_sf','castor_refresh_metrics_alltime']:table==='sc5010'?['castor_refresh_metrics_sc','castor_refresh_sc5_address','castor_refresh_metrics_alltime']:null;\nconst clientErrLit=clientErr?(\"'\"+clientErr.replace(/'/g,\"''\")+\"'\"):'NULL';\nconst okLit=okFlag?'TRUE':'FALSE';\nlet sql;\nif(refreshFns){\n  // Bloco PL/pgSQL: tenta cada refresh em sequência; se qualquer falhar, captura SQLERRM\n  // e SEMPRE chama log_finish marcando ok=false e gravando o primeiro erro.\n  const performBlock=refreshFns.map(fn=>'    BEGIN PERFORM '+fn+'(); EXCEPTION WHEN OTHERS THEN IF v_refresh_err IS NULL THEN v_refresh_err := '+\"'\"+fn+': '+\"'\"+' || SQLERRM; END IF; END;').join('\\n');\n  sql='DO $f$\\n'+\n      'DECLARE v_refresh_err text := NULL;\\n'+\n      'BEGIN\\n'+\n      performBlock+'\\n'+\n      '  PERFORM castor_ingest_log_finish(\\n'+\n      \"    '\"+ingestId+\"'::uuid,\\n\"+\n      '    '+rowsIn+',\\n'+\n      '    CASE WHEN '+okLit+' AND v_refresh_err IS NULL THEN '+rowsIn+' ELSE 0 END,\\n'+\n      '    '+duration+',\\n'+\n      '    ('+okLit+' AND v_refresh_err IS NULL),\\n'+\n      '    COALESCE('+clientErrLit+', v_refresh_err)\\n'+\n      '  );\\n'+\n      'END $f$;';\n}else{\n  sql=\"SELECT castor_ingest_log_finish('\"+ingestId+\"'::uuid, \"+rowsIn+\", \"+(okFlag?rowsIn:0)+\", \"+duration+\", \"+okLit+\", \"+clientErrLit+\");\";\n}\nreturn[{json:{ok:true,ingest_id:ingestId,table,rows_in:rowsIn,rows_out:okFlag?rowsIn:0,duration_ms:duration,err:clientErr,sql}}];"
+      },
+      "id": "c1b2c3d4-2222-4222-8222-222222222222",
+      "name": "Build finish SQL",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        39792,
+        22900
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "={{ $json.sql }}",
+        "options": {
+          "queryReplacement": ""
+        }
+      },
+      "id": "c1b2c3d4-3333-4333-8333-333333333333",
+      "name": "PG: finish",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        40016,
+        22900
+      ],
+      "alwaysOutputData": true,
+      "credentials": {
+        "postgres": {
+          "id": "jFjeYH6Nt3aRNkoM",
+          "name": "Supabase_database"
+        }
+      },
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { ok: ($('Build finish SQL').first().json.err == null), data: { ingest_id: $('Build finish SQL').first().json.ingest_id, table: $('Build finish SQL').first().json.table, rows_in: $('Build finish SQL').first().json.rows_in, rows_out: $('Build finish SQL').first().json.rows_out, duration_ms: $('Build finish SQL').first().json.duration_ms }, error: $('Build finish SQL').first().json.err } }}",
+        "options": {
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Access-Control-Allow-Origin",
+                "value": "*"
+              }
+            ]
+          }
+        }
+      },
+      "id": "c1b2c3d4-4444-4444-8444-444444444444",
+      "name": "Respond Finish",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        40240,
+        22900
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.N8N_WEBHOOK_BASE ? $env.N8N_WEBHOOK_BASE.replace(/\\/$/,'') + '/webhook/castor-panel-cache-purge' : 'http://localhost:5678/webhook/castor-panel-cache-purge' }}",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "reason",
+              "value": "=ingest:{{ $json.table || \"unknown\" }}"
+            },
+            {
+              "name": "ingest_id",
+              "value": "={{ $json.ingest_id || \"\" }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 3000,
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        40128,
+        22900
+      ],
+      "id": "c1b2c3d4-5555-4555-8555-555555555555",
+      "name": "Notify cache purge",
+      "continueOnFail": true,
+      "alwaysOutputData": true
+    }
+  ],
+  "connections": {
+    "Webhook - Source List": {
+      "main": [
+        [
+          {
+            "node": "Drive: List folder",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Drive: List folder": {
+      "main": [
+        [
+          {
+            "node": "Build list response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build list response": {
+      "main": [
+        [
+          {
+            "node": "Respond List",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook - Status": {
+      "main": [
+        [
+          {
+            "node": "PG: sources_status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "PG: sources_status": {
+      "main": [
+        [
+          {
+            "node": "Respond Status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook - Source Replace": {
+      "main": [
+        [
+          {
+            "node": "Validate replace",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate replace": {
+      "main": [
+        [
+          {
+            "node": "Replace valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Replace valid?": {
+      "main": [
+        [
+          {
+            "node": "Drive: Find existing",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond Replace Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Drive: Find existing": {
+      "main": [
+        [
+          {
+            "node": "Pick existing match",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pick existing match": {
+      "main": [
+        [
+          {
+            "node": "Has existing?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has existing?": {
+      "main": [
+        [
+          {
+            "node": "Drive: Update content",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Reattach binary (create)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Drive: Update content": {
+      "main": [
+        [
+          {
+            "node": "Drive: Rename (canonical)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Drive: Rename (canonical)": {
+      "main": [
+        [
+          {
+            "node": "Build replace result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Reattach binary (create)": {
+      "main": [
+        [
+          {
+            "node": "Drive: Upload new",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Drive: Upload new": {
+      "main": [
+        [
+          {
+            "node": "Build replace result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build replace result": {
+      "main": [
+        [
+          {
+            "node": "Respond Replace OK",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook - Ingest": {
+      "main": [
+        [
+          {
+            "node": "Validate ingest",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate ingest": {
+      "main": [
+        [
+          {
+            "node": "Ingest valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ingest valid?": {
+      "main": [
+        [
+          {
+            "node": "PG: ingest_log_start",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond Ingest Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "PG: ingest_log_start": {
+      "main": [
+        [
+          {
+            "node": "Carry ingest ctx",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Carry ingest ctx": {
+      "main": [
+        [
+          {
+            "node": "Drive: Download CSV",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Drive: Download CSV": {
+      "main": [
+        [
+          {
+            "node": "Sniff format",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sniff format": {
+      "main": [
+        [
+          {
+            "node": "Is CSV?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is CSV?": {
+      "main": [
+        [
+          {
+            "node": "Parse positional",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Extract From File",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract From File": {
+      "main": [
+        [
+          {
+            "node": "XLSX rows to text",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "XLSX rows to text": {
+      "main": [
+        [
+          {
+            "node": "Parse positional",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse positional": {
+      "main": [
+        [
+          {
+            "node": "PG: apply ingest",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "PG: apply ingest": {
+      "main": [
+        [
+          {
+            "node": "Build finish payload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build finish payload": {
+      "main": [
+        [
+          {
+            "node": "PG: ingest_log_finish",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "PG: ingest_log_finish": {
+      "main": [
+        [
+          {
+            "node": "Respond Ingest",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook - Ingest Init": {
+      "main": [
+        [
+          {
+            "node": "Validate init",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate init": {
+      "main": [
+        [
+          {
+            "node": "Init valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Init valid?": {
+      "main": [
+        [
+          {
+            "node": "PG: init",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond Init Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "PG: init": {
+      "main": [
+        [
+          {
+            "node": "Build init response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build init response": {
+      "main": [
+        [
+          {
+            "node": "Respond Init",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook - Ingest Batch": {
+      "main": [
+        [
+          {
+            "node": "Build batch SQL",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build batch SQL": {
+      "main": [
+        [
+          {
+            "node": "PG: batch",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "PG: batch": {
+      "main": [
+        [
+          {
+            "node": "Build batch response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build batch response": {
+      "main": [
+        [
+          {
+            "node": "Respond Batch",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook - Ingest Finish": {
+      "main": [
+        [
+          {
+            "node": "Build finish SQL",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build finish SQL": {
+      "main": [
+        [
+          {
+            "node": "PG: finish",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "PG: finish": {
+      "main": [
+        [
+          {
+            "node": "Notify cache purge",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Notify cache purge": {
+      "main": [
+        [
+          {
+            "node": "Respond Finish",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "meta": {
+    "instanceId": "03d32a206f2d8840fce482e6c587726f18775bd9177e9401c00ca76d3086ad41"
+  }
+}

@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "notes": "Manifesto dos arquivos seed do RAG do agente Castor. Use scripts/003_upload_rag_to_drive.ps1 para subir ao Drive e capturar os file_ids. NÃO renomear; sobrescrever in-place quando atualizar.",
+  "files": {
+    "MAPA_DOS_ARQUIVOS.md": {
+      "title": "Mapa dos Arquivos Protheus do Castor",
+      "mime": "text/markdown",
+      "sha256": "308ad340359f81c0d2a9e5814f6cd35272013ca7a73dcb1d608936bd1e68de52",
+      "drive_file_id_var": "DRIVE_FILE_ID_MAPA"
+    },
+    "explicacao_codigos_tabelas.md": {
+      "title": "Explicação dos códigos e tabelas Protheus",
+      "mime": "text/markdown",
+      "sha256": "fd0933efb36eaa006064144c2810fa7b86f6e127e2394fe9bc36878f47b03aea",
+      "drive_file_id_var": "DRIVE_FILE_ID_EXPLICACAO"
+    },
+    "dicionario_sx3.csv": {
+      "title": "Dicionário de Dados SX3 (extraído de SC3010)",
+      "mime": "text/csv",
+      "sha256": "f50322ade82069e461f152801255e56dcd47d52522647c59d21dd0bd71508da4",
+      "drive_file_id_var": "DRIVE_FILE_ID_DICIONARIO"
+    },
+    "arquivos_para_envio.sql": {
+      "title": "Script SQL de origem (Protheus export)",
+      "mime": "application/sql",
+      "sha256": "52905d6d754c0003b67bbbfd08e06fa2e4d6b0fd0a3852df8e89fb07b2ec7ecd",
+      "drive_file_id_var": "DRIVE_FILE_ID_SQL_ORIGEM"
+    },
+    "regras_de_negocio_castor.md": {
+      "title": "Regras de Negócio do agente Castor",
+      "mime": "text/markdown",
+      "sha256": "__GENERATED_BY_SCRIPT__",
+      "drive_file_id_var": "DRIVE_FILE_ID_REGRAS"
+    }
+  }
+}

@@ -1,0 +1,336 @@
+{
+  "name": "[Castor] Sub-fluxo: Drive Document Manager",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## 📂 Drive Document Manager (Sub-fluxo)\nGerencia arquivos no Google Drive para o RAG do Castor.\n\n**Inputs aceitos:**\n- `action`: \"upload\" | \"delete\"\n- `file_id`: ID do arquivo no Drive (para delete)\n- `file_name`: nome do arquivo (para upload, opcional)\n- `folder_id`: pasta destino (default: pasta RAG do Castor `1Azpe9hHXObz93rio04AVWuUxGOlUlbjj`)\n- `binary_property`: nome do binário (default: \"file\")\n\n**Outputs:**\n- `{ success: true, action, file_id, file_name?, file_url? }`\n- `{ success: false, error }` se algo falhar\n\nChamado por:\n- `Castor-RAG / Drive: Delete File (subflow)` (action=delete, single)\n- `Castor-RAG / Drive: Bulk Delete (subflow)` (action=delete, loop)\n- Pode ser chamado de qualquer outro fluxo via Execute Workflow",
+        "height": 460,
+        "width": 760,
+        "color": 5
+      },
+      "id": "dd000000-0000-0000-0000-c00000000001",
+      "name": "Sticky Note Header",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "workflowInputs": {
+          "values": [
+            { "name": "action", "type": "string" },
+            { "name": "file_id", "type": "string" },
+            { "name": "file_name", "type": "string" },
+            { "name": "folder_id", "type": "string" },
+            { "name": "binary_property", "type": "string" }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [80, 560],
+      "id": "dd000000-0000-0000-0000-c00000000002",
+      "name": "When Executed by Another Workflow"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "dd000000-0000-0000-0000-c00000000a01",
+              "name": "action",
+              "value": "={{ ($json.action || 'upload').toLowerCase() }}",
+              "type": "string"
+            },
+            {
+              "id": "dd000000-0000-0000-0000-c00000000a02",
+              "name": "file_id",
+              "value": "={{ $json.file_id || '' }}",
+              "type": "string"
+            },
+            {
+              "id": "dd000000-0000-0000-0000-c00000000a03",
+              "name": "file_name",
+              "value": "={{ $json.file_name || ($binary && $binary.file ? $binary.file.fileName : '') || '' }}",
+              "type": "string"
+            },
+            {
+              "id": "dd000000-0000-0000-0000-c00000000a04",
+              "name": "folder_id",
+              "value": "={{ $json.folder_id || '1Azpe9hHXObz93rio04AVWuUxGOlUlbjj' }}",
+              "type": "string"
+            },
+            {
+              "id": "dd000000-0000-0000-0000-c00000000a05",
+              "name": "binary_property",
+              "value": "={{ $json.binary_property || 'file' }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [320, 560],
+      "id": "dd000000-0000-0000-0000-c00000000003",
+      "name": "Normalize Inputs"
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": false,
+                  "leftValue": "",
+                  "typeValidation": "loose",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "dd000000-0000-0000-0000-c00000000b01",
+                    "leftValue": "={{ $json.action }}",
+                    "rightValue": "upload",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "outputKey": "upload"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": false,
+                  "leftValue": "",
+                  "typeValidation": "loose",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "dd000000-0000-0000-0000-c00000000b02",
+                    "leftValue": "={{ $json.action }}",
+                    "rightValue": "delete",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "outputKey": "delete"
+            }
+          ]
+        },
+        "options": {
+          "fallbackOutput": "extra",
+          "renameFallbackOutput": "invalid"
+        }
+      },
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [560, 560],
+      "id": "dd000000-0000-0000-0000-c00000000004",
+      "name": "Switch Action"
+    },
+    {
+      "parameters": {
+        "inputDataFieldName": "={{ $('Normalize Inputs').item.json.binary_property }}",
+        "name": "={{ $now.format('dd-LL-yyyy') }}_{{ $('Normalize Inputs').item.json.file_name }}",
+        "driveId": {
+          "__rl": true,
+          "mode": "list",
+          "value": "My Drive"
+        },
+        "folderId": {
+          "__rl": true,
+          "value": "={{ $('Normalize Inputs').item.json.folder_id }}",
+          "mode": "id"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [800, 432],
+      "id": "dd000000-0000-0000-0000-c00000000005",
+      "name": "Drive: Upload File",
+      "onError": "continueRegularOutput",
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "1yxLK6IGIPQiU21B",
+          "name": "Google Drive account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "deleteFile",
+        "fileId": {
+          "__rl": true,
+          "value": "={{ $('Normalize Inputs').item.json.file_id }}",
+          "mode": "id"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [800, 624],
+      "id": "dd000000-0000-0000-0000-c00000000006",
+      "name": "Drive: Delete File",
+      "onError": "continueRegularOutput",
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "1yxLK6IGIPQiU21B",
+          "name": "Google Drive account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "dd000000-0000-0000-0000-c00000000c01",
+              "name": "success",
+              "value": "={{ !$json.error }}",
+              "type": "boolean"
+            },
+            {
+              "id": "dd000000-0000-0000-0000-c00000000c02",
+              "name": "action",
+              "value": "upload",
+              "type": "string"
+            },
+            {
+              "id": "dd000000-0000-0000-0000-c00000000c03",
+              "name": "file_id",
+              "value": "={{ $json.id || '' }}",
+              "type": "string"
+            },
+            {
+              "id": "dd000000-0000-0000-0000-c00000000c04",
+              "name": "file_name",
+              "value": "={{ $json.name || $('Normalize Inputs').item.json.file_name }}",
+              "type": "string"
+            },
+            {
+              "id": "dd000000-0000-0000-0000-c00000000c05",
+              "name": "file_url",
+              "value": "={{ $json.webViewLink || '' }}",
+              "type": "string"
+            },
+            {
+              "id": "dd000000-0000-0000-0000-c00000000c06",
+              "name": "error",
+              "value": "={{ $json.error ? String($json.error.message || $json.error) : '' }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [1040, 432],
+      "id": "dd000000-0000-0000-0000-c00000000007",
+      "name": "Build Upload Response"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "dd000000-0000-0000-0000-c00000000d01",
+              "name": "success",
+              "value": "={{ !$json.error }}",
+              "type": "boolean"
+            },
+            {
+              "id": "dd000000-0000-0000-0000-c00000000d02",
+              "name": "action",
+              "value": "delete",
+              "type": "string"
+            },
+            {
+              "id": "dd000000-0000-0000-0000-c00000000d03",
+              "name": "file_id",
+              "value": "={{ $('Normalize Inputs').item.json.file_id }}",
+              "type": "string"
+            },
+            {
+              "id": "dd000000-0000-0000-0000-c00000000d04",
+              "name": "error",
+              "value": "={{ $json.error ? String($json.error.message || $json.error) : '' }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [1040, 624],
+      "id": "dd000000-0000-0000-0000-c00000000008",
+      "name": "Build Delete Response"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "dd000000-0000-0000-0000-c00000000e01",
+              "name": "success",
+              "value": false,
+              "type": "boolean"
+            },
+            {
+              "id": "dd000000-0000-0000-0000-c00000000e02",
+              "name": "error",
+              "value": "Invalid action. Use 'upload' or 'delete'.",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [800, 816],
+      "id": "dd000000-0000-0000-0000-c00000000009",
+      "name": "Build Invalid Response"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "When Executed by Another Workflow": {
+      "main": [[{ "node": "Normalize Inputs", "type": "main", "index": 0 }]]
+    },
+    "Normalize Inputs": {
+      "main": [[{ "node": "Switch Action", "type": "main", "index": 0 }]]
+    },
+    "Switch Action": {
+      "main": [
+        [{ "node": "Drive: Upload File", "type": "main", "index": 0 }],
+        [{ "node": "Drive: Delete File", "type": "main", "index": 0 }],
+        [{ "node": "Build Invalid Response", "type": "main", "index": 0 }]
+      ]
+    },
+    "Drive: Upload File": {
+      "main": [[{ "node": "Build Upload Response", "type": "main", "index": 0 }]]
+    },
+    "Drive: Delete File": {
+      "main": [[{ "node": "Build Delete Response", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": { "executionOrder": "v1" },
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "tags": [{ "name": "Castor" }]
+}

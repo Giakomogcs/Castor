@@ -1,0 +1,62 @@
+{
+  "name": "[Castor] Sub-fluxo_ Register Visit Feedback",
+  "nodes": [
+    {
+      "parameters": {
+        "inputSource": "passthrough"
+      },
+      "id": "c0300300-0000-0000-0000-000000000001",
+      "name": "When called",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [0, 0]
+    },
+    {
+      "parameters": { "jsCode": "console.log(JSON.stringify({tool:'register_visit_feedback', input:$json}));\nreturn $input.all();" },
+      "id": "c0300300-0000-0000-0000-000000000002",
+      "name": "Log input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [200, 0]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SET LOCAL request.jwt.claim.sub TO '{{ $json.user_id }}';\nSELECT * FROM castor_register_visit_feedback(\n  '{{ $json.cliente_codigo }}',\n  '{{ $json.outcome }}',\n  {{ $json.custom_days ?? 'NULL' }},\n  {{ $json.notes ? `'${String($json.notes).replace(/'/g, \"''\")}'` : 'NULL' }},\n  {{ $json.idempotency_key ? `'${$json.idempotency_key}'` : 'NULL' }}\n);",
+        "options": {}
+      },
+      "id": "c0300300-0000-0000-0000-000000000003",
+      "name": "Call RPC",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [400, 0],
+      "credentials": { "postgres": { "id": "__FILL_ME__POSTGRES_CRED_ID__", "name": "Postgres Castor" } },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": { "jsCode": "const row = $input.first().json;\nreturn [{ json: { ok:true, data: row, error:null } }];" },
+      "id": "c0300300-0000-0000-0000-000000000004",
+      "name": "Envelope OK",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [600, -100]
+    },
+    {
+      "parameters": { "jsCode": "const msg = ($json.error?.message || String($json.error || 'erro')).slice(0,200);\nreturn [{ json: { ok:false, data:null, error: msg } }];" },
+      "id": "c0300300-0000-0000-0000-000000000005",
+      "name": "Envelope ERR",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [600, 100]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "When called": { "main": [[{ "node": "Log input", "type": "main", "index": 0 }]] },
+    "Log input": { "main": [[{ "node": "Call RPC", "type": "main", "index": 0 }]] },
+    "Call RPC": { "main": [[{ "node": "Envelope OK", "type": "main", "index": 0 }], [{ "node": "Envelope ERR", "type": "main", "index": 0 }]] }
+  },
+  "active": false,
+  "settings": { "executionOrder": "v1" },
+  "tags": [{ "name": "Castor" }]
+}

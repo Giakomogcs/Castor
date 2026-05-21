@@ -1,0 +1,43 @@
+{
+  "name": "Castor-Chat-DELETE-Session",
+  "nodes": [
+    {
+      "parameters": { "path": "castor-delete-session", "httpMethod": "DELETE", "responseMode": "responseNode", "options": {} },
+      "id": "c01a0003-0000-0000-0000-000000000001",
+      "name": "When called - DELETE session",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, 0],
+      "webhookId": "castor-delete-session"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "DELETE FROM castor_chat_message WHERE session_id = '{{ $json.query.sessionId }}' AND user_id = '{{ $json.query.userId }}'::uuid;\nDELETE FROM castor_chat_session WHERE session_id = '{{ $json.query.sessionId }}'::uuid AND user_id = '{{ $json.query.userId }}'::uuid;",
+        "options": {}
+      },
+      "id": "c01a0003-0000-0000-0000-000000000002",
+      "name": "Delete from DB",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [224, 0],
+      "credentials": { "postgres": { "id": "__FILL_ME__POSTGRES_CRED_ID__", "name": "Postgres Castor" } }
+    },
+    {
+      "parameters": { "respondWith": "json", "responseBody": "={{ { ok: true, data: { deleted: true }, error: null } }}", "options": {} },
+      "id": "c01a0003-0000-0000-0000-000000000003",
+      "name": "Return OK",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [448, 0]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "When called - DELETE session": { "main": [[{ "node": "Delete from DB", "type": "main", "index": 0 }]] },
+    "Delete from DB": { "main": [[{ "node": "Return OK", "type": "main", "index": 0 }]] }
+  },
+  "active": false,
+  "settings": { "executionOrder": "v1" },
+  "tags": [{ "name": "Castor" }]
+}

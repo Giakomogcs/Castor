@@ -1,0 +1,47 @@
+{
+  "name": "Castor-CNPJ-Refresh",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": { "interval": [{ "field": "weeks", "weeksInterval": 1 }] }
+      },
+      "id": "c0220000-0000-0000-0000-000000000001",
+      "name": "Weekly Schedule",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT cnpj FROM castor_cnpj_cache WHERE expires_at < NOW() LIMIT 200;",
+        "options": {}
+      },
+      "id": "c0220000-0000-0000-0000-000000000002",
+      "name": "Find expired",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [200, 0],
+      "credentials": { "postgres": { "id": "__FILL_ME__POSTGRES_CRED_ID__", "name": "Postgres Castor" } }
+    },
+    {
+      "parameters": {
+        "workflowId": { "__rl": true, "value": "__FILL_ME__SUBFLOW_ID_CONSULTAR_CNPJ__", "mode": "list", "cachedResultName": "[Castor] Sub-fluxo_ Consultar CNPJ" },
+        "options": { "waitForSubWorkflow": true }
+      },
+      "id": "c0220000-0000-0000-0000-000000000003",
+      "name": "Refresh each CNPJ",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [400, 0]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Weekly Schedule": { "main": [[{ "node": "Find expired", "type": "main", "index": 0 }]] },
+    "Find expired": { "main": [[{ "node": "Refresh each CNPJ", "type": "main", "index": 0 }]] }
+  },
+  "active": false,
+  "settings": { "executionOrder": "v1" },
+  "tags": [{ "name": "Castor" }]
+}

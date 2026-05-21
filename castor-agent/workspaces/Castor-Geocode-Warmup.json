@@ -1,0 +1,385 @@
+{
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## 🔥 Castor — Geocode Warmup (loop via SplitInBatches)\n\nPopula `castor_geocode_cache` para os municípios que aparecem em `castor_client_metrics_v2.a1_mun` mas ainda não foram geocodificados.\n\n**Arquitetura à prova de timeout:**\n- Cada município é processado individualmente em `Split in Batches (size=1)`.\n- Cada iteração: HTTP Nominatim → Parse → UPSERT → Wait 1.2s → loop.\n- Nenhum Code node bloqueia >60s (sem `await sleep` interno).\n\n**Triggers:**\n- ▶ Manual: rodar agora pela UI do n8n.\n- ⏰ Schedule: a cada 1h tenta processar até 100 municípios pendentes.\n\nAo terminar o lote, chama `/castor-panel-cache-purge`.",
+        "height": 320,
+        "width": 820,
+        "color": 6
+      },
+      "id": "e4dd3e92-2e38-4de4-8f39-bc5eb22bc0eb",
+      "name": "Sticky Header",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [9328, 3376]
+    },
+    {
+      "parameters": {},
+      "id": "e83adbc9-4bd0-4df4-8d36-3178ad45dc75",
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [9568, 3760]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours"
+            }
+          ]
+        }
+      },
+      "id": "6524b9d5-92f8-49db-b3bb-b30bef8276cb",
+      "name": "Schedule (1h)",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [9568, 3920]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH missing AS (\n  SELECT upper(m.a1_mun) AS mun, upper(m.a1_est) AS est, COUNT(*) AS clientes\n    FROM castor_client_metrics_v2 m\n   WHERE m.a1_mun IS NOT NULL AND btrim(m.a1_mun) <> ''\n     AND m.a1_est IS NOT NULL AND btrim(m.a1_est) <> ''\n     AND NOT EXISTS (\n       SELECT 1 FROM castor_geocode_cache g\n        WHERE g.scope = 'municipio'\n          AND g.query_key = upper(m.a1_mun) || '|' || upper(m.a1_est)\n     )\n   GROUP BY upper(m.a1_mun), upper(m.a1_est)\n)\nSELECT mun, est, clientes,\n       (upper(mun) || '|' || upper(est)) AS query_key,\n       (mun || ', ' || est || ', Brasil') AS query\n  FROM missing\n ORDER BY clientes DESC, mun ASC\n LIMIT 100;",
+        "options": {}
+      },
+      "id": "9a4a1415-dfaa-4639-9e0f-9ea1dfcb9a80",
+      "name": "PG: missing municipios",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [9792, 3840],
+      "alwaysOutputData": true,
+      "credentials": {
+        "postgres": {
+          "id": "jFjeYH6Nt3aRNkoM",
+          "name": "Supabase_database"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Sempre emite 1 item. Se houver municipios pendentes, devolve rows[]; senao, devolve { __empty:true }.\n// Tambem filtra o placeholder {success:true} que o Postgres v2.6 injeta quando 0 linhas + alwaysOutputData.\nconst rows = [];\nfor (const it of $input.all()) {\n  const j = it.json || {};\n  if (j && j.mun && j.est && j.query_key) rows.push(j);\n}\nif (!rows.length) {\n  return [{ json: { __empty: true } }];\n}\nreturn rows.map(j => ({ json: j }));"
+      },
+      "id": "b5de7c7b-2782-467c-97e7-8979aaf4346e",
+      "name": "Filter rows",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [9904, 3840],
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "gw1",
+              "leftValue": "={{ $json.__empty === true }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "3ea6401e-98b8-435e-b04f-f06cac5f71f8",
+      "name": "Has pending?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [10064, 3840]
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "id": "0314162f-16b5-4bab-972d-4229aa1d3604",
+      "name": "Loop One-by-One",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [10272, 3856]
+    },
+    {
+      "parameters": {
+        "url": "https://nominatim.openstreetmap.org/search",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "q",
+              "value": "={{ $json.query }}"
+            },
+            {
+              "name": "format",
+              "value": "json"
+            },
+            {
+              "name": "limit",
+              "value": "1"
+            },
+            {
+              "name": "countrycodes",
+              "value": "br"
+            },
+            {
+              "name": "accept-language",
+              "value": "pt-BR"
+            }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "User-Agent",
+              "value": "castor-agent/1.0 (geocode warmup; admin@castor.com.br)"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "json"
+            }
+          },
+          "timeout": 15000
+        }
+      },
+      "id": "0aa69451-de87-4c29-a3c0-d579db079af3",
+      "name": "Nominatim",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [10432, 3872],
+      "alwaysOutputData": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Pega o município atual do loop (sempre disponível) e o resultado do Nominatim (pode ser array vazio, undefined, ou erro).\nconst loopItem = $('Loop One-by-One').item.json || {};\nif (!loopItem.mun || !loopItem.est || !loopItem.query_key) {\n  // item inválido entrou no loop — não devia, mas defendemos\n  return [];\n}\nconst all = $input.all();\nconst first = all.length ? (all[0].json || {}) : {};\nlet body = first;\nif (Array.isArray(first)) body = first;\nelse if (first && Array.isArray(first.data)) body = first.data;\nlet lat = null, lng = null, display = null, okFlag = false;\nconst hit = Array.isArray(body) && body.length ? body[0] : (body && body.lat != null ? body : null);\nif (hit){\n  lat = Number(hit.lat); lng = Number(hit.lon);\n  display = String(hit.display_name || '');\n  okFlag = Number.isFinite(lat) && Number.isFinite(lng);\n}\nreturn [{ json: { mun: loopItem.mun, est: loopItem.est, query_key: loopItem.query_key, lat, lng, display, ok: okFlag } }];"
+      },
+      "id": "5e72de09-1407-4a0d-b9a0-78ed4d513f4a",
+      "name": "Parse",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [10640, 3872],
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT castor_geocode_upsert(\n  'municipio',\n  '{{ $json.query_key.replace(/'/g, \"''\") }}',\n  '{{ $json.est.replace(/'/g, \"''\") }}',\n  '{{ $json.mun.replace(/'/g, \"''\") }}',\n  NULL, NULL,\n  {{ $json.lat != null ? $json.lat : 'NULL' }}::double precision,\n  {{ $json.lng != null ? $json.lng : 'NULL' }}::double precision,\n  {{ $json.display ? \"'\" + $json.display.replace(/'/g, \"''\") + \"'\" : 'NULL' }},\n  'nominatim',\n  {{ $json.ok }}\n);",
+        "options": {}
+      },
+      "id": "6fb6656e-39c0-47ce-9c75-1baab1db0e46",
+      "name": "PG: upsert",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [10864, 3872],
+      "credentials": {
+        "postgres": {
+          "id": "jFjeYH6Nt3aRNkoM",
+          "name": "Supabase_database"
+        }
+      },
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "amount": 1.2
+      },
+      "id": "d0c411b2-c075-4259-9cd8-bc86b2fa8f6b",
+      "name": "Wait 1.2s",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [11088, 3872],
+      "webhookId": "castor-geocode-warmup-wait"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://longflatworm-n8n.cloudfy.live/webhook/castor-panel-cache-purge",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": []
+        },
+        "options": {
+          "timeout": 8000
+        }
+      },
+      "id": "3970173c-2341-49c5-b54e-6405d2132891",
+      "name": "Purge Panel-API cache",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [10448, 3648],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT\n  (SELECT COUNT(*) FROM castor_geocode_cache WHERE scope='municipio' AND ok) AS geocoded_ok,\n  (SELECT COUNT(*) FROM castor_geocode_cache WHERE scope='municipio' AND NOT ok) AS geocoded_fail,\n  (SELECT COUNT(DISTINCT upper(a1_mun) || '|' || upper(a1_est))\n     FROM castor_client_metrics_v2\n    WHERE a1_mun IS NOT NULL AND btrim(a1_mun) <> ''\n      AND a1_est IS NOT NULL AND btrim(a1_est) <> ''\n      AND NOT EXISTS (\n        SELECT 1 FROM castor_geocode_cache g\n         WHERE g.scope='municipio'\n           AND g.query_key = upper(castor_client_metrics_v2.a1_mun) || '|' || upper(castor_client_metrics_v2.a1_est)\n      )\n  ) AS still_missing;",
+        "options": {}
+      },
+      "id": "00c72791-9c2f-4221-9aba-053f8b4735a6",
+      "name": "PG: status",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [10656, 3648],
+      "credentials": {
+        "postgres": {
+          "id": "jFjeYH6Nt3aRNkoM",
+          "name": "Supabase_database"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "PG: missing municipios",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Schedule (1h)": {
+      "main": [
+        [
+          {
+            "node": "PG: missing municipios",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "PG: missing municipios": {
+      "main": [
+        [
+          {
+            "node": "Filter rows",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter rows": {
+      "main": [
+        [
+          {
+            "node": "Has pending?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has pending?": {
+      "main": [
+        [
+          {
+            "node": "Purge Panel-API cache",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Loop One-by-One",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop One-by-One": {
+      "main": [
+        [
+          {
+            "node": "Purge Panel-API cache",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Nominatim",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Nominatim": {
+      "main": [
+        [
+          {
+            "node": "Parse",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse": {
+      "main": [
+        [
+          {
+            "node": "PG: upsert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "PG: upsert": {
+      "main": [
+        [
+          {
+            "node": "Wait 1.2s",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait 1.2s": {
+      "main": [
+        [
+          {
+            "node": "Loop One-by-One",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Purge Panel-API cache": {
+      "main": [
+        [
+          {
+            "node": "PG: status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "meta": {
+    "instanceId": "03d32a206f2d8840fce482e6c587726f18775bd9177e9401c00ca76d3086ad41"
+  }
+}

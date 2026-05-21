@@ -1,0 +1,293 @@
+{
+  "name": "[Castor] Sub-fluxo_ Auto Route Builder",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## 🤖 Castor — Auto Route Builder\n\nSubflow chamado pela IA quando o vendedor pede \"monta um roteiro pra mim\".\n\n**Input** (jsonSchema):\n- `user_id` (uuid)\n- `mode`: `reactivation` | `mixed`\n- `uf`, `cidade`: filtros opcionais\n- `max_stops`: limite (default 8, max 20)\n- `origin_lat`, `origin_lng`: ponto de partida (default = filial Castor 0401)\n- `name`: nome opcional do roteiro\n\n**Fluxo:**\n1. Lê `castor_route_candidates(user_id, mode, uf, cidade, max_stops)` — top N por urgencia.\n2. Roda nearest-neighbor haversine.\n3. Persiste em `castor_route_saved` via `castor_route_save` com `source='ai_auto'` + rationale.\n4. Retorna `{ route_id, stops, total_km, maps_url, rationale }` para o agente.",
+        "height": 360,
+        "width": 760,
+        "color": 3
+      },
+      "id": "ar000001-0000-0000-0000-000000000001",
+      "name": "Sticky Header",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -260,
+        -240
+      ]
+    },
+    {
+      "parameters": {
+        "inputSource": "passthrough"
+      },
+      "id": "ar000001-0000-0000-0000-000000000010",
+      "name": "When called",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        0,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $json || {};\nconst user_id = String(input.user_id || '');\nif (!user_id) return [{ json: { ok:false, error:'user_id obrigatorio' } }];\nconst mode = (['reactivation','mixed'].includes(input.mode)) ? input.mode : 'reactivation';\nconst uf  = input.uf ? String(input.uf).toUpperCase().slice(0,2) : null;\nconst cid = input.cidade ? String(input.cidade).toUpperCase() : null;\nconst max_stops = Math.max(1, Math.min(20, +input.max_stops || 8));\nconst origin_lat = Number.isFinite(+input.origin_lat) ? +input.origin_lat : -23.6884;\nconst origin_lng = Number.isFinite(+input.origin_lng) ? +input.origin_lng : -46.6178;\nconst name = input.name ? String(input.name) : ('Roteiro IA ' + new Date().toLocaleDateString('pt-BR'));\nlet exclude_codes = [];\ntry {\n  const raw = input.exclude_codes;\n  const arr = Array.isArray(raw) ? raw : (typeof raw === 'string' ? JSON.parse(raw || '[]') : []);\n  exclude_codes = (arr || []).map(c => String(c).trim()).filter(Boolean).slice(0, 200);\n} catch (e) { exclude_codes = []; }\nreturn [{ json: { ok:true, user_id, mode, uf, cid, max_stops, origin_lat, origin_lng, name, exclude_codes } }];"
+      },
+      "id": "ar000001-0000-0000-0000-000000000020",
+      "name": "Validate",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "ar1",
+              "leftValue": "={{ $json.ok }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "ar000001-0000-0000-0000-000000000030",
+      "name": "Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        440,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT jsonb_agg(to_jsonb(c.*)) AS rows FROM castor_route_candidates(\n  '{{ $json.user_id }}'::uuid,\n  '{{ $json.mode }}',\n  {{ $json.uf  ? \"'\" + $json.uf  + \"'\" : 'NULL' }},\n  {{ $json.cid ? \"'\" + $json.cid.replace(/'/g, \"''\") + \"'\" : 'NULL' }},\n  {{ $json.max_stops }}\n) c;",
+        "options": {}
+      },
+      "id": "ar000001-0000-0000-0000-000000000040",
+      "name": "PG: candidates",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        660,
+        120
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "jFjeYH6Nt3aRNkoM",
+          "name": "Supabase_database"
+        }
+      },
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const ctx  = $('Validate').first().json;\nlet rows = ($input.first() && $input.first().json && $input.first().json.rows) || [];\nconst _excl = new Set((ctx.exclude_codes || []).map(c => String(c)));\nif (_excl.size) {\n  rows = rows.filter(r => !_excl.has(String(r.cliente_codigo || r.code || '')));\n}\nif (!rows.length) {\n  return [{ json: { ok:false, error:'sem candidatos elegíveis no escopo (uf/cidade/escopo do vendedor)' } }];\n}\nfunction km(lat1,lng1,lat2,lng2){const r=(d)=>d*Math.PI/180;const dlat=r(lat2-lat1)/2,dlng=r(lng2-lng1)/2;const a=Math.sin(dlat)*Math.sin(dlat)+Math.cos(r(lat1))*Math.cos(r(lat2))*Math.sin(dlng)*Math.sin(dlng);return 6371*2*Math.asin(Math.sqrt(a));}\nfunction buildAddress(r){\n  const parts = [];\n  if (r.a1_end) parts.push(String(r.a1_end).trim());\n  const muniEst = [r.a1_mun, r.a1_est].filter(Boolean).join(' - ');\n  if (muniEst) parts.push(muniEst);\n  if (r.a1_cep) parts.push('CEP ' + String(r.a1_cep).trim());\n  return parts.join(', ');\n}\nconst mapped = rows.map(r => {\n  const lat = (r.lat != null && r.lat !== '') ? +r.lat : null;\n  const lng = (r.lng != null && r.lng !== '') ? +r.lng : null;\n  const hasCoord = Number.isFinite(lat) && Number.isFinite(lng);\n  return {\n    cliente_codigo: r.cliente_codigo, name: r.a1_nome,\n    lat: hasCoord ? lat : null,\n    lng: hasCoord ? lng : null,\n    address: buildAddress(r),\n    status_real: r.status_real, urgencia: +r.urgencia_score,\n    fat: +r.faturamento_alltime, dias: +r.dias_sem_pedido,\n    mun: r.a1_mun, est: r.a1_est, porte: r.porte_efetivo,\n    _hasCoord: hasCoord\n  };\n});\nconst withCoord = mapped.filter(x => x._hasCoord);\nconst noCoord   = mapped.filter(x => !x._hasCoord).sort((a,b) => (b.urgencia||0) - (a.urgencia||0));\nlet curLat = ctx.origin_lat, curLng = ctx.origin_lng, total = 0;\nconst ordered = [];\nconst remaining = withCoord.slice();\nwhile (remaining.length) {\n  let best = -1, bestD = Infinity;\n  for (let i = 0; i < remaining.length; i++) {\n    const d = km(curLat, curLng, remaining[i].lat, remaining[i].lng);\n    if (d < bestD) { bestD = d; best = i; }\n  }\n  const nxt = remaining.splice(best, 1)[0];\n  total += bestD;\n  delete nxt._hasCoord;\n  ordered.push(Object.assign({}, nxt, { seq: ordered.length + 1, leg_km: Math.round(bestD*10)/10, cum_km: Math.round(total*10)/10 }));\n  curLat = nxt.lat; curLng = nxt.lng;\n}\n// paradas sem geocode entram no fim, ordenadas por urgência. leg_km/cum_km = null.\nnoCoord.forEach(nxt => {\n  delete nxt._hasCoord;\n  ordered.push(Object.assign({}, nxt, { seq: ordered.length + 1, leg_km: null, cum_km: total ? Math.round(total*10)/10 : null }));\n});\n\nfunction wpEnc(s){\n  if (Number.isFinite(s.lat) && Number.isFinite(s.lng)) return s.lat + ',' + s.lng;\n  return encodeURIComponent(s.address || (s.name + ', ' + (s.mun||'') + ' - ' + (s.est||'')));\n}\nconst originStr = ctx.origin_lat + ',' + ctx.origin_lng;\nconst wpItems = ordered.slice(0, -1).map(wpEnc);\nconst destItem = wpEnc(ordered[ordered.length - 1]);\nconst maps_url = 'https://www.google.com/maps/dir/?api=1&origin=' + originStr + (wpItems.length ? '&waypoints=' + wpItems.join('|') : '') + '&destination=' + destItem;\n\nconst urgMed  = Math.round(ordered.reduce((s,x)=>s+(x.urgencia||0),0)/ordered.length);\nconst fatSum  = ordered.reduce((s,x)=>s+(x.fat||0),0);\nconst ufs = Array.from(new Set(ordered.map(x=>x.est).filter(Boolean))).join(', ');\nconst muns = Array.from(new Set(ordered.map(x=>x.mun).filter(Boolean))).slice(0,4).join(', ');\nconst semGeoNote = noCoord.length\n  ? ` ${noCoord.length} parada(s) ficaram sem coordenadas e entraram no fim do roteiro pelo endereço cadastrado — o Maps tenta localizar pelo nome/CEP, mas vale conferir/ajustar manualmente.`\n  : '';\nconst kmStr = total > 0 ? `~${total.toFixed(1)} km` : 'distância não calculada (sem coordenadas)';\nconst rationale = `Selecionei ${ordered.length} cliente(s) em ${ufs || '—'} (${muns}${ordered.length>4?'…':''}), priorizando maior urgência (score médio ${urgMed}). Faturamento histórico somado dos selecionados: R$ ${fatSum.toLocaleString('pt-BR',{maximumFractionDigits:0})}. Total de ${kmStr} no roteiro otimizado por vizinho mais próximo.${semGeoNote}`;\n\nreturn [{ json: { ok:true, ordered, total_km: Math.round(total*10)/10, maps_url, rationale, ctx, no_geocode_count: noCoord.length } }];"
+      },
+      "id": "ar000001-0000-0000-0000-000000000050",
+      "name": "Order & rationale",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        120
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT castor_route_save_unified(\n  '{{ $json.ctx.user_id }}'::uuid,\n  '{{ $json.ctx.name.replace(/'/g, \"''\") }}',\n  'ai_auto',\n  '{{ JSON.stringify($json.ordered).replace(/'/g, \"''\") }}'::jsonb,\n  {{ $json.total_km }},\n  {{ $json.ctx.origin_lat }}::double precision,\n  {{ $json.ctx.origin_lng }}::double precision,\n  '{{ $json.rationale.replace(/'/g, \"''\") }}',\n  '{{ $json.maps_url.replace(/'/g, \"''\") }}'\n) AS result;",
+        "options": {}
+      },
+      "id": "ar000001-0000-0000-0000-000000000060",
+      "name": "PG: save",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        1100,
+        120
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "jFjeYH6Nt3aRNkoM",
+          "name": "Supabase_database"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const r = $input.first().json.result || $input.first().json;\nconst route_id = (r && r.route_id) || $input.first().json.route_id;\nconst appended = !!(r && r.appended);\nconst added_count = (r && r.added_count) || 0;\nconst d = $('Order & rationale').first().json;\nreturn [{ json: { ok:true, data: { route_id, appended, added_count, name: d.ctx.name, stops: d.ordered, total_km: d.total_km, maps_url: d.maps_url, rationale: d.rationale }, error:null } }];"
+      },
+      "id": "ar000001-0000-0000-0000-000000000070",
+      "name": "Wrap response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1320,
+        120
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "return [{ json: { ok:false, data:null, error: $json.error || 'invalid input' } }];"
+      },
+      "id": "ar000001-0000-0000-0000-000000000080",
+      "name": "Wrap error",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "ar2",
+              "leftValue": "={{ $json.ok }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "ar000001-0000-0000-0000-000000000055",
+      "name": "Has stops?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        1000,
+        120
+      ]
+    }
+  ],
+  "connections": {
+    "When called": {
+      "main": [
+        [
+          {
+            "node": "Validate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate": {
+      "main": [
+        [
+          {
+            "node": "Valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Valid?": {
+      "main": [
+        [
+          {
+            "node": "PG: candidates",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Wrap error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "PG: candidates": {
+      "main": [
+        [
+          {
+            "node": "Order & rationale",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Order & rationale": {
+      "main": [
+        [
+          {
+            "node": "Has stops?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has stops?": {
+      "main": [
+        [
+          {
+            "node": "PG: save",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Wrap error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "PG: save": {
+      "main": [
+        [
+          {
+            "node": "Wrap response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "meta": {
+    "instanceId": "castor-auto-route-builder"
+  }
+}

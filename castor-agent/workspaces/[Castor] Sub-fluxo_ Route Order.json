@@ -1,0 +1,130 @@
+{
+  "name": "[Castor] Sub-fluxo_ Route Order",
+  "nodes": [
+    {
+      "parameters": {
+        "inputSource": "passthrough"
+      },
+      "id": "c0300700-0000-0000-0000-000000000001",
+      "name": "When called",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [0, 0]
+    },
+    {
+      "parameters": { "jsCode": "console.log(JSON.stringify({tool:'route_order', input:$json}));\nreturn $input.all();" },
+      "id": "c0300700-0000-0000-0000-000000000002",
+      "name": "Log input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [200, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Valida input e monta URL do snapshot. HTTP nos nós seguintes (fora do Code task runner de 60s).\nconst PANEL_BASE = 'https://longflatworm-n8n.cloudfy.live/webhook';\nconst input = $json || {};\nconst userId = String(input.user_id || '');\nconst codes = Array.isArray(input.client_codes) ? input.client_codes.map(s => String(s).trim()).filter(Boolean) : [];\nconst origin_lat = Number.isFinite(+input.origin_lat) ? +input.origin_lat : -23.6884;\nconst origin_lng = Number.isFinite(+input.origin_lng) ? +input.origin_lng : -46.6178;\nconst source = ['reactivation','prospect','mixed'].includes(input.source) ? input.source : 'reactivation';\nconst snapshot_url = PANEL_BASE + '/castor-panel-snapshot' + (userId ? '?userId=' + encodeURIComponent(userId) : '');\nconst route_url = PANEL_BASE + '/castor-panel-route';\nreturn [{ json: { user_id: userId, codes, origin_lat, origin_lng, source, snapshot_url, route_url, missing_codes: !codes.length } }];"
+      },
+      "id": "c0300700-0000-0000-0000-000000000003",
+      "name": "Prepare params",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [400, 0]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $json.snapshot_url }}",
+        "options": {
+          "timeout": 280000,
+          "response": { "response": { "responseFormat": "json" } }
+        }
+      },
+      "id": "c0300700-0000-0000-0000-000000000004",
+      "name": "Fetch snapshot",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [600, 0],
+      "continueOnFail": true,
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const params = $('Prepare params').first().json;\nif (params.missing_codes) return [{ json: { ok: false, halt: true, data: null, error: 'client_codes vazio' } }];\nconst resp = $json || {};\nif (resp.error && !resp.ok) return [{ json: { ok: false, halt: true, data: null, error: 'snapshot_failed: ' + (resp.error.message || resp.error) } }];\nif (!resp || resp.ok === false) return [{ json: { ok: false, halt: true, data: null, error: 'snapshot_failed: ' + ((resp && resp.error) || 'snapshot indisponivel') } }];\nconst snap = resp.data || {};\nconst munIdx = Object.create(null);\nfor (const m of (snap.municipios || [])) { if (m.lat != null && m.lng != null) munIdx[m.mun + '|' + m.est] = m; }\nconst byCode = Object.create(null);\nfor (const c of (snap.clientes || [])) byCode[c.cliente_codigo] = c;\nconst stops = [];\nconst skipped = [];\nfor (const code of params.codes) {\n  const c = byCode[code];\n  if (!c) { skipped.push({ code, reason: 'cliente nao encontrado' }); continue; }\n  const m = munIdx[(c.a1_mun || '').toUpperCase() + '|' + (c.a1_est || '').toUpperCase()];\n  if (!m) { skipped.push({ code, reason: 'sem coordenadas no CC2010' }); continue; }\n  stops.push({ cliente_codigo: code, lat: m.lat, lng: m.lng, name: c.a1_nome || c.a1_nreduz || code });\n}\nif (!stops.length) return [{ json: { ok: false, halt: true, data: { skipped }, error: 'nenhum cliente com coordenadas' } }];\nreturn [{ json: { ok: true, halt: false, stops, skipped, route_url: params.route_url, route_body: { user_id: params.user_id, stops, origin_lat: params.origin_lat, origin_lng: params.origin_lng, source: params.source } } }];"
+      },
+      "id": "c0300700-0000-0000-0000-000000000005",
+      "name": "Build stops",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [800, 0]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "loose", "version": 2 },
+          "conditions": [
+            { "id": "ro1", "leftValue": "={{ $json.halt }}", "rightValue": true, "operator": { "type": "boolean", "operation": "true", "singleValue": true } }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "c0300700-0000-0000-0000-000000000006",
+      "name": "Halt?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [1000, 0]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.route_url }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.route_body) }}",
+        "options": {
+          "timeout": 280000,
+          "response": { "response": { "responseFormat": "json" } }
+        }
+      },
+      "id": "c0300700-0000-0000-0000-000000000007",
+      "name": "Fetch route",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1200, 100],
+      "continueOnFail": true,
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const ctx = $('Build stops').first().json;\nconst resp = $json || {};\nif (resp.error && !resp.ok) return [{ json: { ok: false, data: { skipped: ctx.skipped || [] }, error: 'route_failed: ' + (resp.error.message || resp.error) } }];\nif (!resp || resp.ok === false) return [{ json: { ok: false, data: { skipped: ctx.skipped || [] }, error: 'route_failed: ' + ((resp && resp.error) || 'route falhou') } }];\nreturn [{ json: { ok: true, data: Object.assign({}, resp.data, { skipped: ctx.skipped || [] }), error: null } }];"
+      },
+      "id": "c0300700-0000-0000-0000-000000000008",
+      "name": "Envelope route",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1400, 100]
+    },
+    {
+      "parameters": {
+        "jsCode": "return [{ json: { ok: false, data: $json.data || null, error: $json.error || 'halt' } }];"
+      },
+      "id": "c0300700-0000-0000-0000-000000000009",
+      "name": "Halt envelope",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1200, -100]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "When called":     { "main": [[{ "node": "Log input", "type": "main", "index": 0 }]] },
+    "Log input":       { "main": [[{ "node": "Prepare params", "type": "main", "index": 0 }]] },
+    "Prepare params":  { "main": [[{ "node": "Fetch snapshot", "type": "main", "index": 0 }]] },
+    "Fetch snapshot":  { "main": [[{ "node": "Build stops", "type": "main", "index": 0 }]] },
+    "Build stops":     { "main": [[{ "node": "Halt?", "type": "main", "index": 0 }]] },
+    "Halt?":           { "main": [[{ "node": "Halt envelope", "type": "main", "index": 0 }], [{ "node": "Fetch route", "type": "main", "index": 0 }]] },
+    "Fetch route":     { "main": [[{ "node": "Envelope route", "type": "main", "index": 0 }]] }
+  },
+  "active": false,
+  "settings": { "executionOrder": "v1" },
+  "tags": [{ "name": "Castor" }]
+}

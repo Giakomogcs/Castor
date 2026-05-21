@@ -1,0 +1,43 @@
+{
+  "name": "Castor-Chat-GET-Sessions",
+  "nodes": [
+    {
+      "parameters": { "path": "castor-sessions", "responseMode": "responseNode", "options": {} },
+      "id": "c01a0001-0000-0000-0000-000000000001",
+      "name": "When called - GET sessions",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, 0],
+      "webhookId": "castor-sessions"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT session_id, MIN(created_at) AS data_inicio,\n  (SELECT message->>'content' FROM castor_chat_message m2\n    WHERE m2.session_id = m.session_id AND m2.message->>'type'='human'\n    ORDER BY id DESC LIMIT 1) AS titulo\nFROM castor_chat_message m\nWHERE user_id = '{{ $json.query.userId }}'::uuid\nGROUP BY session_id ORDER BY data_inicio DESC;",
+        "options": {}
+      },
+      "id": "c01a0001-0000-0000-0000-000000000002",
+      "name": "List Sessions from DB",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [224, 0],
+      "credentials": { "postgres": { "id": "__FILL_ME__POSTGRES_CRED_ID__", "name": "Postgres Castor" } }
+    },
+    {
+      "parameters": { "respondWith": "allIncomingItems", "options": {} },
+      "id": "c01a0001-0000-0000-0000-000000000003",
+      "name": "Return Sessions",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [448, 0]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "When called - GET sessions": { "main": [[{ "node": "List Sessions from DB", "type": "main", "index": 0 }]] },
+    "List Sessions from DB": { "main": [[{ "node": "Return Sessions", "type": "main", "index": 0 }]] }
+  },
+  "active": false,
+  "settings": { "executionOrder": "v1" },
+  "tags": [{ "name": "Castor" }]
+}

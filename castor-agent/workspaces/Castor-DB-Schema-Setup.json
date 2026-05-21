@@ -1,0 +1,117 @@
+{
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "castor-rag-schema-setup",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "c902ee3b-1ebf-4f14-99cc-fa784d91fdd5",
+      "name": "Webhook - Schema Setup",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [2272, 656],
+      "webhookId": "castor-rag-schema-setup"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Tenant guard — refuse if DB name does not look like a Castor DB.\n// (n8n cannot read $env without explicit binding; soft-check only.)\nreturn $input.all();"
+      },
+      "id": "55881ea0-6043-4a21-b595-1157db1fe3ed",
+      "name": "Tenant Guard",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2480, 656]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "-- ✅ Tier B idempotente — espelha o padrão Sameka. Não DROPa, não exige ownership.\n-- Tabelas de USUÁRIOS / CHAT / SESSIONS NÃO ficam aqui (vivem nas migrations 001-006).\nCREATE EXTENSION IF NOT EXISTS vector;\n\n-- 1. Metadados de Arquivos (Drive ou local)\nCREATE TABLE IF NOT EXISTS castor_document_metadata (\n    id              TEXT PRIMARY KEY,\n    title           TEXT,\n    url             TEXT,\n    created_at      TIMESTAMP DEFAULT NOW(),\n    schema          TEXT,\n    session_id      TEXT,\n    modified_time   TEXT,\n    content_hash    TEXT,\n    last_indexed_at TIMESTAMP\n);\nALTER TABLE castor_document_metadata ADD COLUMN IF NOT EXISTS modified_time   TEXT;\nALTER TABLE castor_document_metadata ADD COLUMN IF NOT EXISTS content_hash    TEXT;\nALTER TABLE castor_document_metadata ADD COLUMN IF NOT EXISTS last_indexed_at TIMESTAMP;\nALTER TABLE castor_document_metadata ADD COLUMN IF NOT EXISTS archived        BOOLEAN DEFAULT FALSE;\n\n-- 2. Linhas tabulares (Excel/CSV)\nCREATE TABLE IF NOT EXISTS castor_document_rows (\n    id         SERIAL PRIMARY KEY,\n    dataset_id TEXT REFERENCES castor_document_metadata(id) ON DELETE CASCADE,\n    row_data   JSONB\n);\n\n-- 3. Vetores (UMA tabela só; file_id mora em metadata->>'file_id')\nCREATE TABLE IF NOT EXISTS castor_documents (\n    id        bigserial PRIMARY KEY,\n    content   text,\n    metadata  jsonb,\n    embedding vector(1536)\n);\n\n-- 4. Função de busca (Match) — stateless, pode recriar\nDROP FUNCTION IF EXISTS match_castor_documents;\nCREATE FUNCTION match_castor_documents (\n    query_embedding vector(1536),\n    match_count     int   DEFAULT NULL,\n    filter          jsonb DEFAULT '{}'\n) RETURNS TABLE (\n    id         bigint,\n    content    text,\n    metadata   jsonb,\n    similarity float\n)\nLANGUAGE plpgsql AS $$\n#variable_conflict use_column\nBEGIN\n    RETURN QUERY\n    SELECT id, content, metadata,\n           1 - (castor_documents.embedding <=> query_embedding) AS similarity\n    FROM castor_documents\n    WHERE metadata @> filter\n    ORDER BY castor_documents.embedding <=> query_embedding\n    LIMIT match_count;\nEND;$$;\n\n-- 5. Índices\nCREATE INDEX IF NOT EXISTS castor_idx_document_metadata_session  ON castor_document_metadata(session_id);\nCREATE INDEX IF NOT EXISTS castor_idx_document_metadata_modified ON castor_document_metadata(modified_time);\nCREATE INDEX IF NOT EXISTS castor_idx_document_rows_dataset      ON castor_document_rows(dataset_id);\nCREATE INDEX IF NOT EXISTS castor_idx_documents_metadata_gin     ON castor_documents USING GIN (metadata);\nCREATE INDEX IF NOT EXISTS castor_idx_documents_file_id          ON castor_documents ((metadata->>'file_id'));\n\nNOTIFY pgrst, 'reload schema';",
+        "options": {}
+      },
+      "id": "b52dd6a0-e06f-4a7b-986b-03a64228004a",
+      "name": "Apply Tier B Schema",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [2672, 656],
+      "credentials": {
+        "postgres": {
+          "id": "jFjeYH6Nt3aRNkoM",
+          "name": "Supabase_database"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { ok: true, data: { tier: 'B', tables_ensured: ['castor_document_metadata','castor_document_rows','castor_documents'] }, error: null } }}",
+        "options": {}
+      },
+      "id": "b2db610c-c733-410d-a691-15736ec6496c",
+      "name": "Respond",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [2880, 656]
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [2272, 848],
+      "id": "f472632d-bcb7-4aaf-856c-95c9da87d357",
+      "name": "When clicking ‘Execute workflow’"
+    }
+  ],
+  "connections": {
+    "Webhook - Schema Setup": {
+      "main": [
+        [
+          {
+            "node": "Tenant Guard",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Tenant Guard": {
+      "main": [
+        [
+          {
+            "node": "Apply Tier B Schema",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Apply Tier B Schema": {
+      "main": [
+        [
+          {
+            "node": "Respond",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "When clicking ‘Execute workflow’": {
+      "main": [
+        [
+          {
+            "node": "Tenant Guard",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "03d32a206f2d8840fce482e6c587726f18775bd9177e9401c00ca76d3086ad41"
+  }
+}

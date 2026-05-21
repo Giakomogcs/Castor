@@ -1,0 +1,334 @@
+{
+  "name": "Castor-Geocode",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## 🌐 Castor — Geocode (Nominatim/OSM, lazy)\n\nServiço de geocoding sob demanda usando OpenStreetMap Nominatim (gratuito, sem chave).\n\n**Endpoints:**\n- `POST /castor-geocode` → `{ scope:'municipio'|'endereco', uf?, municipio?, endereco?, cep? }` → `{ lat, lng, display_name, cached:bool }`\n- `POST /castor-geocode-batch` → `{ scope, items:[{uf,municipio,endereco,cep}] }` → `[{key, lat, lng}]` (com rate-limit interno 1.1s entre lookups vivos)\n\n**Comportamento:**\n1. Normaliza a query (UPPER + sem acentos) e monta `query_key`.\n2. Consulta `castor_geocode_cache` via `castor_geocode_lookup`. Se hit → retorna.\n3. Miss: chama Nominatim com `User-Agent: castor-agent/1.0` (obrigatório).\n4. Upsert via `castor_geocode_upsert` (mesmo entradas `ok=false` para não martelar a API).\n\n**Regras Nominatim:** ≤1 req/s, User-Agent obrigatório, cache local mandatório.",
+        "height": 380,
+        "width": 820,
+        "color": 5
+      },
+      "id": "g0000001-0000-0000-0000-000000000001",
+      "name": "Sticky Header",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [0, -200]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "castor-geocode",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "g0000001-0000-0000-0000-000000000010",
+      "name": "Webhook - Geocode",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [240, 200],
+      "webhookId": "castor-geocode"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Normaliza input e monta query_key\nfunction stripAccents(s){ return String(s||'').normalize('NFD').replace(/[\\u0300-\\u036f]/g,''); }\nfunction norm(s){ return stripAccents(String(s||'').trim()).toUpperCase().replace(/\\s+/g,' '); }\n\nconst body = ($json && $json.body) ? $json.body : ($json || {});\nconst scope = (body.scope === 'endereco') ? 'endereco' : 'municipio';\nconst uf  = norm(body.uf).slice(0,2);\nconst mun = norm(body.municipio);\nconst end = norm(body.endereco);\nconst cep = String(body.cep || '').replace(/\\D/g,'').slice(0,8);\n\nlet key, query;\nif (scope === 'endereco'){\n  if (!end && !cep) return [{ json: { ok:false, error:'endereco ou cep obrigatorio para scope=endereco' } }];\n  key = [cep || 'NOCEP', end || 'NOEND', mun || 'NOMUN', uf || 'NOUF'].join('|');\n  // Nominatim aceita CEP brasileiro direto (postalcode) ou query livre.\n  if (cep && end){\n    query = end + ', ' + (mun ? mun + ', ' : '') + (uf ? uf + ', ' : '') + cep + ', Brasil';\n  } else if (cep){\n    query = cep + ', Brasil';\n  } else {\n    query = end + (mun ? ', ' + mun : '') + (uf ? ', ' + uf : '') + ', Brasil';\n  }\n} else {\n  if (!mun || !uf) return [{ json: { ok:false, error:'uf e municipio obrigatorios para scope=municipio' } }];\n  key = mun + '|' + uf;\n  query = mun + ', ' + uf + ', Brasil';\n}\nreturn [{ json: { ok:true, scope, query_key:key, query, uf, municipio:mun, endereco:end, cep } }];"
+      },
+      "id": "g0000001-0000-0000-0000-000000000020",
+      "name": "Normalize",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [460, 200]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "loose", "version": 2 },
+          "conditions": [ { "id": "gok1", "leftValue": "={{ $json.ok }}", "rightValue": true, "operator": { "type": "boolean", "operation": "true", "singleValue": true } } ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "g0000001-0000-0000-0000-000000000030",
+      "name": "Input ok?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [680, 200]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT to_jsonb(c.*) AS row FROM castor_geocode_lookup('{{ $json.scope }}','{{ $json.query_key.replace(/'/g, \"''\") }}') c;",
+        "options": {}
+      },
+      "id": "g0000001-0000-0000-0000-000000000040",
+      "name": "PG: cache lookup",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [900, 140],
+      "alwaysOutputData": true,
+      "credentials": { "postgres": { "id": "jFjeYH6Nt3aRNkoM", "name": "Supabase_database" } }
+    },
+    {
+      "parameters": {
+        "jsCode": "const ctx = $('Normalize').first().json;\nconst row = ($input.first() && $input.first().json && $input.first().json.row) || null;\nconst hasHit = row && (row.lat != null || row.ok === false);\n// Se já consultamos antes (mesmo que tenha falhado), retornamos do cache para evitar martelar Nominatim.\nreturn [{ json: Object.assign({}, ctx, { cache_hit: !!hasHit, cache_row: row }) }];"
+      },
+      "id": "g0000001-0000-0000-0000-000000000050",
+      "name": "Carry cache",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1120, 140]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "loose", "version": 2 },
+          "conditions": [ { "id": "ghit", "leftValue": "={{ $json.cache_hit }}", "rightValue": true, "operator": { "type": "boolean", "operation": "true", "singleValue": true } } ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "g0000001-0000-0000-0000-000000000060",
+      "name": "Cache hit?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [1340, 140]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { ok: true, data: { cached: true, scope: $json.scope, query_key: $json.query_key, lat: ($json.cache_row && $json.cache_row.lat) || null, lng: ($json.cache_row && $json.cache_row.lng) || null, display_name: ($json.cache_row && $json.cache_row.display_name) || null, source: ($json.cache_row && $json.cache_row.source) || null }, error: null } }}",
+        "options": { "responseHeaders": { "entries": [ { "name": "Access-Control-Allow-Origin", "value": "*" } ] } }
+      },
+      "id": "g0000001-0000-0000-0000-000000000070",
+      "name": "Respond from cache",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1560, 60]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "https://nominatim.openstreetmap.org/search",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "q", "value": "={{ $json.query }}" },
+            { "name": "format", "value": "json" },
+            { "name": "limit", "value": "1" },
+            { "name": "countrycodes", "value": "br" },
+            { "name": "accept-language", "value": "pt-BR" },
+            { "name": "addressdetails", "value": "1" }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "User-Agent", "value": "castor-agent/1.0 (geocode cache; contact admin@castor.com.br)" }
+          ]
+        },
+        "options": {
+          "timeout": 15000,
+          "response": { "response": { "responseFormat": "json" } }
+        }
+      },
+      "id": "g0000001-0000-0000-0000-000000000080",
+      "name": "Nominatim search",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1560, 220],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const ctx = $('Carry cache').first().json;\nconst items = $input.all();\nlet hit = null;\nfor (const it of items){\n  const j = it && it.json;\n  if (Array.isArray(j) && j.length){ hit = j[0]; break; }\n  if (j && j.lat != null && j.lon != null){ hit = j; break; }\n}\nconst lat = hit ? Number(hit.lat) : null;\nconst lng = hit ? Number(hit.lon) : null;\nconst display = hit ? String(hit.display_name || '') : null;\nconst okFlag = Number.isFinite(lat) && Number.isFinite(lng);\nreturn [{ json: Object.assign({}, ctx, { lat: okFlag ? lat : null, lng: okFlag ? lng : null, display, geocode_ok: okFlag }) }];"
+      },
+      "id": "g0000001-0000-0000-0000-000000000090",
+      "name": "Parse Nominatim",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1780, 220]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT to_jsonb(castor_geocode_upsert(\n  '{{ $json.scope }}',\n  '{{ $json.query_key.replace(/'/g, \"''\") }}',\n  {{ $json.uf ? \"'\" + $json.uf.replace(/'/g, \"''\") + \"'\" : 'NULL' }},\n  {{ $json.municipio ? \"'\" + $json.municipio.replace(/'/g, \"''\") + \"'\" : 'NULL' }},\n  {{ $json.endereco ? \"'\" + $json.endereco.replace(/'/g, \"''\") + \"'\" : 'NULL' }},\n  {{ $json.cep ? \"'\" + $json.cep + \"'\" : 'NULL' }},\n  {{ $json.lat != null ? $json.lat : 'NULL' }}::double precision,\n  {{ $json.lng != null ? $json.lng : 'NULL' }}::double precision,\n  {{ $json.display ? \"'\" + $json.display.replace(/'/g, \"''\") + \"'\" : 'NULL' }},\n  'nominatim',\n  {{ $json.geocode_ok }}\n)) AS row;",
+        "options": {}
+      },
+      "id": "g0000001-0000-0000-0000-0000000000a0",
+      "name": "PG: cache upsert",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [2000, 220],
+      "credentials": { "postgres": { "id": "jFjeYH6Nt3aRNkoM", "name": "Supabase_database" } }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { ok: $('Parse Nominatim').first().json.geocode_ok, data: { cached: false, scope: $('Parse Nominatim').first().json.scope, query_key: $('Parse Nominatim').first().json.query_key, lat: $('Parse Nominatim').first().json.lat, lng: $('Parse Nominatim').first().json.lng, display_name: $('Parse Nominatim').first().json.display, source: 'nominatim' }, error: $('Parse Nominatim').first().json.geocode_ok ? null : 'not_found' } }}",
+        "options": { "responseHeaders": { "entries": [ { "name": "Access-Control-Allow-Origin", "value": "*" } ] } }
+      },
+      "id": "g0000001-0000-0000-0000-0000000000b0",
+      "name": "Respond fresh",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [2220, 220]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { ok: false, data: null, error: $json.error || 'invalid input' } }}",
+        "options": { "responseCode": 400, "responseHeaders": { "entries": [ { "name": "Access-Control-Allow-Origin", "value": "*" } ] } }
+      },
+      "id": "g0000001-0000-0000-0000-0000000000c0",
+      "name": "Respond Error",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [900, 360]
+    },
+
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "castor-geocode-batch",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "g0000002-0000-0000-0000-000000000010",
+      "name": "Webhook - Geocode Batch",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [240, 600],
+      "webhookId": "castor-geocode-batch"
+    },
+    {
+      "parameters": {
+        "jsCode": "function stripAccents(s){ return String(s||'').normalize('NFD').replace(/[\\u0300-\\u036f]/g,''); }\nfunction norm(s){ return stripAccents(String(s||'').trim()).toUpperCase().replace(/\\s+/g,' '); }\n\nconst body = ($json && $json.body) ? $json.body : ($json || {});\nconst scope = (body.scope === 'endereco') ? 'endereco' : 'municipio';\nconst items = Array.isArray(body.items) ? body.items : [];\nconst hardCap = 200; // proteção contra abuso (200 lookups ~ 220s)\nif (items.length === 0) return [{ json: { ok:false, error:'items vazio' } }];\nif (items.length > hardCap) return [{ json: { ok:false, error:'máximo ' + hardCap + ' itens por chamada' } }];\n\nconst out = [];\nfor (const it of items){\n  const uf  = norm(it.uf).slice(0,2);\n  const mun = norm(it.municipio);\n  const end = norm(it.endereco);\n  const cep = String(it.cep || '').replace(/\\D/g,'').slice(0,8);\n  let key, query;\n  if (scope === 'endereco'){\n    if (!end && !cep) continue;\n    key = [cep || 'NOCEP', end || 'NOEND', mun || 'NOMUN', uf || 'NOUF'].join('|');\n    query = (end ? end : '') + (mun ? ', ' + mun : '') + (uf ? ', ' + uf : '') + (cep ? ', ' + cep : '') + ', Brasil';\n  } else {\n    if (!mun || !uf) continue;\n    key = mun + '|' + uf;\n    query = mun + ', ' + uf + ', Brasil';\n  }\n  out.push({ json: { scope, query_key: key, query, uf, municipio: mun, endereco: end, cep } });\n}\nif (out.length === 0) return [{ json: { ok:false, error:'nenhum item válido após normalização' } }];\nreturn out;"
+      },
+      "id": "g0000002-0000-0000-0000-000000000020",
+      "name": "Normalize batch",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [460, 600]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT to_jsonb(castor_geocode_lookup('{{ $json.scope }}','{{ $json.query_key.replace(/'/g, \"''\") }}')) AS row;",
+        "options": {}
+      },
+      "id": "g0000002-0000-0000-0000-000000000030",
+      "name": "PG: batch lookup",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [680, 600],
+      "alwaysOutputData": true,
+      "credentials": { "postgres": { "id": "jFjeYH6Nt3aRNkoM", "name": "Supabase_database" } }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Marca cada item como cached ou miss. Itens preservam o input + cache_row.\nconst out = [];\nfor (const it of $input.all()){\n  const ctx = it.json || {};\n  const row = ctx.row || null;\n  const hasHit = row && (row.lat != null || row.ok === false);\n  out.push({ json: Object.assign({}, ctx, { cache_hit: !!hasHit, cache_row: row }) });\n}\nreturn out;"
+      },
+      "id": "g0000002-0000-0000-0000-000000000040",
+      "name": "Mark hits",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [900, 600]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "loose", "version": 2 },
+          "conditions": [ { "id": "gbhit", "leftValue": "={{ $json.cache_hit }}", "rightValue": true, "operator": { "type": "boolean", "operation": "true", "singleValue": true } } ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "g0000002-0000-0000-0000-000000000050",
+      "name": "Hit?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [1120, 600]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Para os MISSES, percorre sequencialmente respeitando rate-limit (1.1s) do Nominatim.\nconst items = $input.all();\nconst results = [];\nasync function sleep(ms){ return new Promise(r => setTimeout(r, ms)); }\nfor (let i = 0; i < items.length; i++){\n  const it = items[i].json || {};\n  if (i > 0) await sleep(1100); // respeita 1 req/s\n  let lat = null, lng = null, display = null, okFlag = false;\n  try {\n    const url = 'https://nominatim.openstreetmap.org/search?format=json&limit=1&countrycodes=br&accept-language=pt-BR&q=' + encodeURIComponent(it.query);\n    const r = await this.helpers.httpRequest({\n      method: 'GET',\n      url,\n      headers: { 'User-Agent': 'castor-agent/1.0 (geocode cache; contact admin@castor.com.br)' },\n      json: true,\n      timeout: 15000\n    });\n    const hit = Array.isArray(r) && r.length ? r[0] : null;\n    if (hit){\n      lat = Number(hit.lat); lng = Number(hit.lon);\n      display = String(hit.display_name || '');\n      okFlag = Number.isFinite(lat) && Number.isFinite(lng);\n    }\n  } catch (e) {\n    // mantém okFlag=false; persistimos a falha pra não retentar\n  }\n  results.push({ json: Object.assign({}, it, { lat: okFlag ? lat : null, lng: okFlag ? lng : null, display, geocode_ok: okFlag }) });\n}\nreturn results;"
+      },
+      "id": "g0000002-0000-0000-0000-000000000060",
+      "name": "Nominatim batch",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1340, 720]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT to_jsonb(castor_geocode_upsert(\n  '{{ $json.scope }}',\n  '{{ $json.query_key.replace(/'/g, \"''\") }}',\n  {{ $json.uf ? \"'\" + $json.uf.replace(/'/g, \"''\") + \"'\" : 'NULL' }},\n  {{ $json.municipio ? \"'\" + $json.municipio.replace(/'/g, \"''\") + \"'\" : 'NULL' }},\n  {{ $json.endereco ? \"'\" + $json.endereco.replace(/'/g, \"''\") + \"'\" : 'NULL' }},\n  {{ $json.cep ? \"'\" + $json.cep + \"'\" : 'NULL' }},\n  {{ $json.lat != null ? $json.lat : 'NULL' }}::double precision,\n  {{ $json.lng != null ? $json.lng : 'NULL' }}::double precision,\n  {{ $json.display ? \"'\" + $json.display.replace(/'/g, \"''\") + \"'\" : 'NULL' }},\n  'nominatim',\n  {{ $json.geocode_ok }}\n)) AS row;",
+        "options": {}
+      },
+      "id": "g0000002-0000-0000-0000-000000000070",
+      "name": "PG: batch upsert",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [1560, 720],
+      "credentials": { "postgres": { "id": "jFjeYH6Nt3aRNkoM", "name": "Supabase_database" } }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Junta hits do cache + lookups Nominatim em uma lista final.\nconst hits = $('Hit?').all().filter(it => (it.json||{}).cache_hit).map(it => {\n  const j = it.json || {};\n  const row = j.cache_row || {};\n  return { query_key: j.query_key, scope: j.scope, lat: row.lat, lng: row.lng, display_name: row.display_name, cached: true, source: row.source || 'nominatim' };\n});\nconst fresh = $('Nominatim batch').all().map(it => {\n  const j = it.json || {};\n  return { query_key: j.query_key, scope: j.scope, lat: j.lat, lng: j.lng, display_name: j.display, cached: false, source: 'nominatim' };\n});\nconst items = hits.concat(fresh);\nreturn [{ json: { ok: true, data: { count: items.length, items }, error: null } }];"
+      },
+      "id": "g0000002-0000-0000-0000-000000000080",
+      "name": "Build batch response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1780, 720]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": { "responseHeaders": { "entries": [ { "name": "Access-Control-Allow-Origin", "value": "*" } ] } }
+      },
+      "id": "g0000002-0000-0000-0000-000000000090",
+      "name": "Respond Batch",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [2000, 720]
+    }
+  ],
+  "connections": {
+    "Webhook - Geocode": { "main": [[{ "node": "Normalize", "type": "main", "index": 0 }]] },
+    "Normalize": { "main": [[{ "node": "Input ok?", "type": "main", "index": 0 }]] },
+    "Input ok?": {
+      "main": [
+        [{ "node": "PG: cache lookup", "type": "main", "index": 0 }],
+        [{ "node": "Respond Error", "type": "main", "index": 0 }]
+      ]
+    },
+    "PG: cache lookup": { "main": [[{ "node": "Carry cache", "type": "main", "index": 0 }]] },
+    "Carry cache": { "main": [[{ "node": "Cache hit?", "type": "main", "index": 0 }]] },
+    "Cache hit?": {
+      "main": [
+        [{ "node": "Respond from cache", "type": "main", "index": 0 }],
+        [{ "node": "Nominatim search", "type": "main", "index": 0 }]
+      ]
+    },
+    "Nominatim search": { "main": [[{ "node": "Parse Nominatim", "type": "main", "index": 0 }]] },
+    "Parse Nominatim": { "main": [[{ "node": "PG: cache upsert", "type": "main", "index": 0 }]] },
+    "PG: cache upsert": { "main": [[{ "node": "Respond fresh", "type": "main", "index": 0 }]] },
+
+    "Webhook - Geocode Batch": { "main": [[{ "node": "Normalize batch", "type": "main", "index": 0 }]] },
+    "Normalize batch": { "main": [[{ "node": "PG: batch lookup", "type": "main", "index": 0 }]] },
+    "PG: batch lookup": { "main": [[{ "node": "Mark hits", "type": "main", "index": 0 }]] },
+    "Mark hits": { "main": [[{ "node": "Hit?", "type": "main", "index": 0 }]] },
+    "Hit?": {
+      "main": [
+        [{ "node": "Build batch response", "type": "main", "index": 0 }],
+        [{ "node": "Nominatim batch", "type": "main", "index": 0 }]
+      ]
+    },
+    "Nominatim batch": { "main": [[{ "node": "PG: batch upsert", "type": "main", "index": 0 }]] },
+    "PG: batch upsert": { "main": [[{ "node": "Build batch response", "type": "main", "index": 0 }]] },
+    "Build batch response": { "main": [[{ "node": "Respond Batch", "type": "main", "index": 0 }]] }
+  },
+  "pinData": {},
+  "meta": { "instanceId": "castor-geocode" }
+}
